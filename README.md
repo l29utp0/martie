@@ -24,7 +24,7 @@ This first version is intentionally small:
 
 ## Configuration
 
-Copy `.env.example` values into your environment:
+Copy `.env.example` to `.env.dev` and `.env.prod`, then fill in each bot's values:
 
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_CHAT_ID`
@@ -36,6 +36,8 @@ Copy `.env.example` values into your environment:
 - `KEYWORD_DENYLIST`
 - `MAX_THREAD_AGE_HOURS`
 - `PRUNE_AFTER_HOURS`
+
+Make targets default to `BOT_ENV=dev`. Pass `BOT_ENV=prod` to use `.env.prod` instead. If `SQLITE_PATH` is blank, local runs use `data/dev.db` or `data/prod.db`.
 
 ## Run
 
@@ -50,9 +52,35 @@ To snapshot the current catalog as already handled and exit:
 make seed
 ```
 
+Use the production bot and environment with:
+
+```bash
+make seed BOT_ENV=prod
+make run BOT_ENV=prod
+```
+
 ## Build
 
 `make build` uses Go's `-trimpath` and `-buildvcs=false` flags so release binaries do not embed your local filesystem path or repo state.
+
+## Docker
+
+```bash
+make docker-build
+make docker-run
+```
+
+Docker uses the same `BOT_ENV` selection. It always stores SQLite at `/data/bot.db` inside the container, with separate `martie-dev` and `martie-prod` volumes:
+
+```bash
+make docker-seed BOT_ENV=prod
+make docker-run BOT_ENV=prod
+make docker-logs BOT_ENV=prod
+```
+
+`make docker-clean` removes the current dev/prod containers and Docker volumes.
+
+The image is a static `scratch` runtime with CA certificates, a non-root user, no exposed ports, and SQLite state under `/data`. Secrets stay in the runtime environment.
 
 ## License
 

@@ -1,0 +1,15 @@
+.git
+.gocache
+.env
+.env.*
+data
+martie
+martie-*
+*.test
+*.out
+coverage.out
+.DS_Store
+.idea
+.vscode
+*.swp
+*.swo
