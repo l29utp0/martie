@@ -17,12 +17,12 @@ DOCKER_RUN_FLAGS = --env-file $(ENV_FILE) \
 	--cap-drop ALL \
 	--security-opt no-new-privileges
 
-.PHONY: help fmt lint test tidy build run snapshot docker-build docker-run docker-snapshot docker-stop docker-logs docker-clean check clean
+.PHONY: help fmt lint test tidy build run snapshot docker-build docker-run docker-snapshot docker-deploy docker-logs docker-clean check clean
 
 help:
 	@printf '%s\n' \
 		'Targets: fmt lint test tidy build run snapshot check clean' \
-		'Docker:  docker-build docker-run docker-snapshot docker-stop docker-logs docker-clean' \
+		'Docker:  docker-build docker-run docker-snapshot docker-deploy docker-logs docker-clean' \
 		'Env:     BOT_ENV=dev reads .env.dev; BOT_ENV=prod reads .env.prod' \
 		'Image:   IMAGE=martie:local'
 
@@ -62,8 +62,13 @@ docker-snapshot:
 		$(DOCKER_RUN_FLAGS) \
 		$(IMAGE) snapshot
 
-docker-stop:
-	docker stop $(CONTAINER)
+docker-deploy: docker-build
+	-docker rm -f $(CONTAINER)
+	docker run -d \
+		--name $(CONTAINER) \
+		--restart unless-stopped \
+		$(DOCKER_RUN_FLAGS) \
+		$(IMAGE)
 
 docker-logs:
 	docker logs -f $(CONTAINER)
