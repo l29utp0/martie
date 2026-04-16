@@ -49,7 +49,7 @@ Keep this file focused on repo-specific guidance and non-obvious constraints rat
 
 - Keep the program's entrypoints easy to follow.
 - Prefer package-level entrypoints when they read better than empty service constructors.
-- Prefer the repo's `make` targets for common local workflows: `make fmt`, `make lint`, `make test`, `make check`, `make build`, `make run`, `make seed`, and `make clean`.
+- Prefer the repo's `make` targets for common local workflows: `make fmt`, `make lint`, `make test`, `make check`, `make build`, `make run`, `make snapshot`, and `make clean`.
 - Run `gofmt` on changed Go files.
 - Validate with `go test ./...` and `go vet ./...` when checks are needed.
 - If the environment blocks the default Go build cache, fall back to a repo-local `GOCACHE`.

@@ -46,16 +46,16 @@ make tidy
 make run
 ```
 
-To snapshot the current catalog as already handled and exit:
+To snapshot the current catalog and exit:
 
 ```bash
-make seed
+make snapshot
 ```
 
 Use the production bot and environment with:
 
 ```bash
-make seed BOT_ENV=prod
+make snapshot BOT_ENV=prod
 make run BOT_ENV=prod
 ```
 
@@ -73,7 +73,7 @@ make docker-run
 Docker uses the same `BOT_ENV` selection. It always stores SQLite at `/data/bot.db` inside the container, with separate `martie-dev` and `martie-prod` volumes:
 
 ```bash
-make docker-seed BOT_ENV=prod
+make docker-snapshot BOT_ENV=prod
 make docker-run BOT_ENV=prod
 make docker-logs BOT_ENV=prod
 ```
@@ -89,7 +89,8 @@ This project is licensed under the GNU General Public License, version 3 or any 
 ## Behavior
 
 - The bot notifies only for newly discovered threads.
-- On first run it will notify for everything currently in the catalog unless you run `make seed` first to store the current catalog as already handled.
+- On first run it will notify for everything currently in the catalog unless you run `make snapshot` first to store the current catalog as already handled.
 - `MIN_REPLY_POSTS` can delay a notification until a thread reaches the reply threshold.
+- `make snapshot` stores the current catalog and marks only threads that already meet `MIN_REPLY_POSTS` as handled.
 - `BOARD_DENYLIST`, `KEYWORD_DENYLIST`, `MAX_THREAD_AGE_HOURS`, and `PRUNE_AFTER_HOURS` filter what is tracked and how long it stays in SQLite.
 - New threads are stored before send; if Telegram accepts a message but the follow-up SQLite write fails, that notification may be retried on the next poll.

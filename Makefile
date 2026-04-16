@@ -4,7 +4,6 @@ BOT_ENV ?= dev
 ENV_FILE ?= .env.$(BOT_ENV)
 CONTAINER ?= martie-$(BOT_ENV)
 VOLUME ?= martie-$(BOT_ENV)-data
-GOFILES := $(shell rg --files -g '*.go')
 GO_BUILD_FLAGS ?= -trimpath -buildvcs=false
 LOAD_ENV = set -a; . ./$(ENV_FILE); set +a; \
 	BOT_ENV=$(BOT_ENV); \
@@ -18,17 +17,17 @@ DOCKER_RUN_FLAGS = --env-file $(ENV_FILE) \
 	--cap-drop ALL \
 	--security-opt no-new-privileges
 
-.PHONY: help fmt lint test tidy build run seed docker-build docker-run docker-seed docker-stop docker-logs docker-clean check clean
+.PHONY: help fmt lint test tidy build run snapshot docker-build docker-run docker-snapshot docker-stop docker-logs docker-clean check clean
 
 help:
 	@printf '%s\n' \
-		'Targets: fmt lint test tidy build run seed check clean' \
-		'Docker:  docker-build docker-run docker-seed docker-stop docker-logs docker-clean' \
+		'Targets: fmt lint test tidy build run snapshot check clean' \
+		'Docker:  docker-build docker-run docker-snapshot docker-stop docker-logs docker-clean' \
 		'Env:     BOT_ENV=dev reads .env.dev; BOT_ENV=prod reads .env.prod' \
 		'Image:   IMAGE=martie:local'
 
 fmt:
-	gofmt -w $(GOFILES)
+	gofmt -w cmd internal
 
 lint:
 	go vet ./...
@@ -45,8 +44,8 @@ build:
 run:
 	$(LOAD_ENV); go run $(GO_BUILD_FLAGS) ./cmd/martie
 
-seed:
-	$(LOAD_ENV); go run $(GO_BUILD_FLAGS) ./cmd/martie seed
+snapshot:
+	$(LOAD_ENV); go run $(GO_BUILD_FLAGS) ./cmd/martie snapshot
 
 docker-build:
 	docker build --pull -t $(IMAGE) .
@@ -58,10 +57,10 @@ docker-run:
 		$(DOCKER_RUN_FLAGS) \
 		$(IMAGE)
 
-docker-seed:
+docker-snapshot:
 	docker run --rm \
 		$(DOCKER_RUN_FLAGS) \
-		$(IMAGE) seed
+		$(IMAGE) snapshot
 
 docker-stop:
 	docker stop $(CONTAINER)

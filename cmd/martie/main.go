@@ -48,9 +48,9 @@ func main() {
 		if err := app.Run(ctx, cfg, store, ptchanClient, telegram.NewClient(cfg.TelegramBotToken), logger); err != nil {
 			log.Fatalf("run service: %v", err)
 		}
-	case "seed":
-		if err := app.Seed(ctx, cfg, store, ptchanClient, logger); err != nil {
-			log.Fatalf("seed store: %v", err)
+	case "snapshot":
+		if err := app.Snapshot(ctx, cfg, store, ptchanClient, logger); err != nil {
+			log.Fatalf("snapshot store: %v", err)
 		}
 	default:
 		log.Fatalf("unsupported command: %s", command)
@@ -63,12 +63,12 @@ func parseCommand(args []string) (string, error) {
 	}
 
 	switch args[0] {
-	case "run", "seed":
+	case "run", "snapshot":
 		if len(args) > 1 {
-			return "", fmt.Errorf("usage: martie [run|seed]")
+			return "", fmt.Errorf("usage: martie [run|snapshot]")
 		}
 		return args[0], nil
 	default:
-		return "", fmt.Errorf("usage: martie [run|seed]")
+		return "", fmt.Errorf("usage: martie [run|snapshot]")
 	}
 }

@@ -35,7 +35,7 @@ func TestPollPreservesNotifiedThreadOutsidePruneWindow(t *testing.T) {
 		LastSeenAt:    lastSeenAt,
 		NotifiedNewAt: &notifiedAt,
 	}); err != nil {
-		t.Fatalf("seed record: %v", err)
+		t.Fatalf("insert record: %v", err)
 	}
 
 	b := bot{

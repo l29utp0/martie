@@ -10,23 +10,24 @@ import (
 	"martie/internal/state"
 )
 
-func Seed(ctx context.Context, cfg Config, store *state.Store, ptchan *ptchan.Client, logger *log.Logger) error {
+func Snapshot(ctx context.Context, cfg Config, store *state.Store, ptchan *ptchan.Client, logger *log.Logger) error {
 	return bot{
 		cfg:    cfg,
 		store:  store,
 		ptchan: ptchan,
 		logger: logger,
-	}.seed(ctx)
+	}.snapshot(ctx)
 }
 
-func (s bot) seed(ctx context.Context) error {
+func (s bot) snapshot(ctx context.Context) error {
 	catalog, err := s.ptchan.FetchCatalog(ctx)
 	if err != nil {
-		return fmt.Errorf("fetch catalog for seed: %w", err)
+		return fmt.Errorf("fetch catalog for snapshot: %w", err)
 	}
 
 	now := time.Now().UTC()
-	seeded := 0
+	stored := 0
+	handled := 0
 
 	for _, thread := range catalog.Threads {
 		if !threadAllowed(s.cfg, thread, now) {
@@ -34,15 +35,19 @@ func (s bot) seed(ctx context.Context) error {
 		}
 
 		record := recordFromThread(thread, now)
-		// Seed establishes the current catalog as an already-handled baseline.
-		record.NotifiedNewAt = &now
-		if err := s.store.UpsertThread(ctx, record); err != nil {
-			return fmt.Errorf("seed thread %s: %w", thread.ID, err)
+		if thread.ReplyPosts >= s.cfg.MinReplyPosts {
+			// Snapshot marks already-eligible threads as handled without suppressing
+			// existing low-reply threads that may cross the threshold later.
+			record.NotifiedNewAt = &now
+			handled++
 		}
-		seeded++
+		if err := s.store.UpsertThread(ctx, record); err != nil {
+			return fmt.Errorf("snapshot thread %s: %w", thread.ID, err)
+		}
+		stored++
 	}
 
-	s.logger.Printf("seed complete: %d threads stored as already handled", seeded)
+	s.logger.Printf("snapshot complete: %d threads stored, %d marked already handled", stored, handled)
 	return nil
 }
 
