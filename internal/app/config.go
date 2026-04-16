@@ -71,17 +71,6 @@ func LoadConfig() (Config, error) {
 	return cfg, nil
 }
 
-func (cfg Config) ValidateRun() error {
-	if cfg.TelegramBotToken == "" {
-		return fmt.Errorf("TELEGRAM_BOT_TOKEN is required")
-	}
-	if cfg.TelegramChatID == 0 {
-		return fmt.Errorf("TELEGRAM_CHAT_ID is required")
-	}
-
-	return nil
-}
-
 func envOr(key, fallback string) string {
 	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
 		return v

@@ -50,17 +50,6 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
-func (s *Store) IsEmpty(ctx context.Context) (bool, error) {
-	const query = `SELECT COUNT(*) FROM threads;`
-
-	var count int
-	if err := s.db.QueryRowContext(ctx, query).Scan(&count); err != nil {
-		return false, fmt.Errorf("count threads: %w", err)
-	}
-
-	return count == 0, nil
-}
-
 func (s *Store) PruneSeenBefore(ctx context.Context, cutoff time.Time) (int64, error) {
 	const statement = `DELETE FROM threads WHERE last_seen_at < ?;`
 

@@ -12,26 +12,26 @@ import (
 func FormatNotification(baseURL string, thread ptchan.Thread, minReplyPosts int, now time.Time) string {
 	var parts []string
 
-	header := fmt.Sprintf("/%s/ #%d | %d replies, %d files", thread.Board, thread.PostID, thread.ReplyPosts, thread.ReplyFiles)
-	if label := thresholdReachedLabel(thread, minReplyPosts, now); label != "" {
-		header = fmt.Sprintf("%s | %s", header, label)
-	}
-	parts = append(parts, "<b>"+html.EscapeString(header)+"</b>")
+	parts = append(parts, "<b>"+html.EscapeString(fmt.Sprintf("/%s/ #%d", thread.Board, thread.PostID))+"</b>")
+	parts = append(parts, "<i>"+html.EscapeString(notificationSummary(thread, minReplyPosts, now))+"</i>")
 	parts = append(parts, html.EscapeString(ptchan.ThreadURL(baseURL, thread.Board, thread.PostID)))
-
-	if subject := compactWhitespace(thread.Subject); subject != "" {
-		parts = append(parts, html.EscapeString(subject))
-	}
 
 	return strings.Join(parts, "\n")
 }
 
-func compactWhitespace(input string) string {
-	return strings.Join(strings.Fields(input), " ")
+func notificationSummary(thread ptchan.Thread, minReplyPosts int, now time.Time) string {
+	parts := []string{pluralize(thread.ReplyPosts, "reply")}
+	if thread.ReplyFiles > 0 {
+		parts = append(parts, pluralize(thread.ReplyFiles, "file"))
+	}
+	if label := thresholdReachedLabel(thread, minReplyPosts, now); label != "" {
+		parts = append(parts, label)
+	}
+	return strings.Join(parts, ", ")
 }
 
 func thresholdReachedLabel(thread ptchan.Thread, minReplyPosts int, now time.Time) string {
-	if minReplyPosts <= 0 || thread.Date.IsZero() || thread.ReplyPosts < minReplyPosts {
+	if minReplyPosts <= 1 || thread.Date.IsZero() || thread.ReplyPosts < minReplyPosts {
 		return ""
 	}
 
@@ -40,7 +40,17 @@ func thresholdReachedLabel(thread ptchan.Thread, minReplyPosts int, now time.Tim
 		return ""
 	}
 
-	return "reached in " + humanizeElapsed(elapsed)
+	return fmt.Sprintf("hit %d in %s", minReplyPosts, humanizeElapsed(elapsed))
+}
+
+func pluralize(count int, noun string) string {
+	if count == 1 {
+		return fmt.Sprintf("1 %s", noun)
+	}
+	if strings.HasSuffix(noun, "y") {
+		return fmt.Sprintf("%d %sies", count, strings.TrimSuffix(noun, "y"))
+	}
+	return fmt.Sprintf("%d %ss", count, noun)
 }
 
 func humanizeElapsed(d time.Duration) string {

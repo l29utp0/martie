@@ -104,6 +104,8 @@ func (s bot) syncOnce(ctx context.Context) error {
 
 		message := telegram.FormatNotification(s.cfg.PtchanBaseURL, thread, s.cfg.MinReplyPosts, now)
 		if err := s.telegram.SendMessage(ctx, s.cfg.TelegramChatID, message); err != nil {
+			// TODO: Telegram may return retry_after, but this loop currently retries on
+			// the next poll, so a short PollInterval may retry sooner than requested.
 			return fmt.Errorf("send telegram message for %s: %w", thread.ID, err)
 		}
 

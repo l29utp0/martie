@@ -26,8 +26,11 @@ func main() {
 	}
 
 	if command == "run" {
-		if err := cfg.ValidateRun(); err != nil {
-			log.Fatalf("load config: %v", err)
+		if cfg.TelegramBotToken == "" {
+			log.Fatalf("load config: TELEGRAM_BOT_TOKEN is required")
+		}
+		if cfg.TelegramChatID == 0 {
+			log.Fatalf("load config: TELEGRAM_CHAT_ID is required")
 		}
 	}
 

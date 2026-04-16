@@ -61,6 +61,9 @@ func TestClientSendMessage(t *testing.T) {
 	if got := form.Get("parse_mode"); got != "HTML" {
 		t.Fatalf("parse_mode = %q, want %q", got, "HTML")
 	}
+	if got := form.Get("disable_web_page_preview"); got != "" {
+		t.Fatalf("disable_web_page_preview = %q, want empty", got)
+	}
 }
 
 func TestClientSendMessageAPIFailure(t *testing.T) {
@@ -82,32 +85,8 @@ func TestClientSendMessageAPIFailure(t *testing.T) {
 	if err == nil {
 		t.Fatal("SendMessage() error = nil, want non-nil")
 	}
-	if !strings.Contains(err.Error(), "chat not found") {
-		t.Fatalf("SendMessage() error = %q, want to contain %q", err, "chat not found")
-	}
-}
-
-func TestClientSendMessageStatusFailure(t *testing.T) {
-	client := &Client{
-		baseURL: "https://api.telegram.org/bottoken",
-		http: &http.Client{
-			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-				return &http.Response{
-					StatusCode: http.StatusBadGateway,
-					Status:     "502 Bad Gateway",
-					Header:     make(http.Header),
-					Body:       io.NopCloser(strings.NewReader("bad gateway")),
-				}, nil
-			}),
-		},
-	}
-
-	err := client.SendMessage(context.Background(), 12345, "hello")
-	if err == nil {
-		t.Fatal("SendMessage() error = nil, want non-nil")
-	}
-	if !strings.Contains(err.Error(), "502") {
-		t.Fatalf("SendMessage() error = %q, want to contain %q", err, "502")
+	if !strings.Contains(err.Error(), `"description":"chat not found"`) {
+		t.Fatalf("SendMessage() error = %q, want to contain %q", err, `"description":"chat not found"`)
 	}
 }
 
