@@ -57,6 +57,6 @@ func (s bot) syncPtchan(ctx context.Context) error {
 		newThreads++
 	}
 
-	s.logger.Printf("sync complete: %d threads seen, %d new notifications", len(catalog.Threads), newThreads)
+	s.logger.Printf("ptchan sync complete: %d threads seen, %d new notifications", len(catalog.Threads), newThreads)
 	return nil
 }

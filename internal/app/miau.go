@@ -61,6 +61,7 @@ func (s bot) handleStartedMiauStream(ctx context.Context, channel miau.Channel, 
 	if err := s.telegram.SendMessage(ctx, s.cfg.TelegramChatID, message); err != nil {
 		return fmt.Errorf("send miau telegram message for %s: %w", channel.Key, err)
 	}
+	s.logger.Printf("miau stream %s live notification sent", channel.Key)
 
 	stream.LiveNotified = true
 	if err := s.store.UpsertStreamState(ctx, stream); err != nil {
@@ -83,6 +84,7 @@ func (s bot) handleStoppedMiauStream(ctx context.Context, channel miau.Channel, 
 	stream.Active = false
 	stream.LiveNotified = false
 	stream.Consecutive404s = 0
+	s.logger.Printf("miau stream %s marked offline after %d misses", channel.Key, miauEndMissThreshold)
 	return s.storeMiauState(ctx, channel.Key, stream)
 }
 
