@@ -21,7 +21,7 @@ func FormatNotification(baseURL string, thread ptchan.Thread, minReplyPosts int,
 
 func FormatMiauNotification(pageURL string) string {
 	return strings.Join([]string{
-		"<b>Miau stream live</b>",
+		"<b>🔴 Miau stream live</b>",
 		html.EscapeString(pageURL),
 	}, "\n")
 }
