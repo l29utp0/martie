@@ -27,6 +27,13 @@ type ThreadRecord struct {
 	NotifiedNewAt *time.Time
 }
 
+type StreamState struct {
+	Key             string
+	Active          bool
+	LiveNotified    bool
+	Consecutive404s int
+}
+
 func Open(path string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("create data dir: %w", err)
@@ -79,6 +86,13 @@ CREATE TABLE IF NOT EXISTS threads (
 
 CREATE INDEX IF NOT EXISTS idx_threads_post_id ON threads(post_id);
 CREATE INDEX IF NOT EXISTS idx_threads_last_seen_at ON threads(last_seen_at);
+
+CREATE TABLE IF NOT EXISTS stream_states (
+  stream_key TEXT PRIMARY KEY,
+  active INTEGER NOT NULL,
+  live_notified INTEGER NOT NULL,
+  consecutive_404s INTEGER NOT NULL
+);
 `
 
 	if _, err := s.db.ExecContext(ctx, schema); err != nil {
@@ -164,6 +178,67 @@ ON CONFLICT(thread_id) DO UPDATE SET
 		return fmt.Errorf("upsert thread: %w", err)
 	}
 	return nil
+}
+
+func (s *Store) GetStreamState(ctx context.Context, key string) (StreamState, bool, error) {
+	const query = `
+SELECT stream_key, active, live_notified, consecutive_404s
+FROM stream_states
+WHERE stream_key = ?;
+`
+
+	var stream StreamState
+	var active int
+	var liveNotified int
+
+	err := s.db.QueryRowContext(ctx, query, key).Scan(
+		&stream.Key,
+		&active,
+		&liveNotified,
+		&stream.Consecutive404s,
+	)
+	if err == sql.ErrNoRows {
+		return StreamState{}, false, nil
+	}
+	if err != nil {
+		return StreamState{}, false, fmt.Errorf("query stream state: %w", err)
+	}
+
+	stream.Active = active != 0
+	stream.LiveNotified = liveNotified != 0
+	return stream, true, nil
+}
+
+func (s *Store) UpsertStreamState(ctx context.Context, stream StreamState) error {
+	const statement = `
+INSERT INTO stream_states (stream_key, active, live_notified, consecutive_404s)
+VALUES (?, ?, ?, ?)
+ON CONFLICT(stream_key) DO UPDATE SET
+  active = excluded.active,
+  live_notified = excluded.live_notified,
+  consecutive_404s = excluded.consecutive_404s;
+`
+
+	_, err := s.db.ExecContext(
+		ctx,
+		statement,
+		stream.Key,
+		boolToInt(stream.Active),
+		boolToInt(stream.LiveNotified),
+		stream.Consecutive404s,
+	)
+	if err != nil {
+		return fmt.Errorf("upsert stream state: %w", err)
+	}
+
+	return nil
+}
+
+func boolToInt(v bool) int {
+	if v {
+		return 1
+	}
+	return 0
 }
 
 func formatTime(t time.Time) string {

@@ -1,12 +1,14 @@
 # martie
 
 `martie` watches the `ptchan` overboard catalog and forwards newly seen threads to a Telegram chat.
+It also checks a small set of `miau` stream URLs and notifies when a stream comes online.
 
 It stays intentionally small:
 
 - polls `https://ptchan.org/catalog.json`
 - tracks seen threads in SQLite
 - sends Telegram messages for new matches
+- sends Telegram messages when configured `miau` streams go live
 - stores only the state it needs
 
 - no webhook
@@ -93,6 +95,7 @@ The image is a static `scratch` runtime with CA certificates, a non-root user, n
 - `make snapshot` stores the current catalog and marks only threads that already meet `MIN_REPLY_POSTS` as handled.
 - `BOARD_DENYLIST`, `KEYWORD_DENYLIST`, `MAX_THREAD_AGE_HOURS`, and `PRUNE_AFTER_HOURS` filter what is tracked and how long it stays in SQLite.
 - New threads are stored before send; if Telegram accepts a message but the follow-up SQLite write fails, that notification may be retried on the next poll.
+- `miau` stream checks treat a live URL as active until it returns `404` for 2 consecutive poll cycles.
 
 ## License
 

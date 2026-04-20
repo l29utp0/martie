@@ -6,6 +6,7 @@ import (
 	"log"
 	"time"
 
+	"martie/internal/miau"
 	"martie/internal/ptchan"
 	"martie/internal/state"
 	"martie/internal/telegram"
@@ -14,6 +15,7 @@ import (
 type bot struct {
 	cfg      Config
 	store    *state.Store
+	miau     *miau.Client
 	ptchan   *ptchan.Client
 	telegram *telegram.Client
 	logger   *log.Logger
@@ -23,6 +25,7 @@ func Run(
 	ctx context.Context,
 	cfg Config,
 	store *state.Store,
+	miau *miau.Client,
 	ptchan *ptchan.Client,
 	telegram *telegram.Client,
 	logger *log.Logger,
@@ -30,6 +33,7 @@ func Run(
 	return bot{
 		cfg:      cfg,
 		store:    store,
+		miau:     miau,
 		ptchan:   ptchan,
 		telegram: telegram,
 		logger:   logger,
@@ -38,7 +42,7 @@ func Run(
 
 func (s bot) run(ctx context.Context) error {
 	if err := s.poll(ctx); err != nil {
-		s.logger.Printf("initial sync failed: %v", err)
+		return fmt.Errorf("initial sync: %w", err)
 	}
 
 	ticker := time.NewTicker(s.cfg.PollInterval)
@@ -57,7 +61,11 @@ func (s bot) run(ctx context.Context) error {
 }
 
 func (s bot) poll(ctx context.Context) error {
-	if err := s.syncOnce(ctx); err != nil {
+	if err := s.syncPtchan(ctx); err != nil {
+		return err
+	}
+
+	if err := s.syncMiau(ctx); err != nil {
 		return err
 	}
 
@@ -65,58 +73,5 @@ func (s bot) poll(ctx context.Context) error {
 		return err
 	}
 
-	return nil
-}
-
-func (s bot) syncOnce(ctx context.Context) error {
-	catalog, err := s.ptchan.FetchCatalog(ctx)
-	if err != nil {
-		return fmt.Errorf("fetch catalog: %w", err)
-	}
-
-	now := time.Now().UTC()
-	newThreads := 0
-
-	for _, thread := range catalog.Threads {
-		if !threadAllowed(s.cfg, thread, now) {
-			continue
-		}
-
-		record, _, err := s.store.GetThread(ctx, thread.ID)
-		if err != nil {
-			return fmt.Errorf("load thread %s: %w", thread.ID, err)
-		}
-
-		notifiedAt := record.NotifiedNewAt
-		record = recordFromThread(thread, now)
-		record.NotifiedNewAt = notifiedAt
-
-		if err := s.store.UpsertThread(ctx, record); err != nil {
-			return fmt.Errorf("store thread %s: %w", thread.ID, err)
-		}
-
-		if record.NotifiedNewAt != nil {
-			continue
-		}
-		if thread.ReplyPosts < s.cfg.MinReplyPosts {
-			continue
-		}
-
-		message := telegram.FormatNotification(s.cfg.PtchanBaseURL, thread, s.cfg.MinReplyPosts, now)
-		if err := s.telegram.SendMessage(ctx, s.cfg.TelegramChatID, message); err != nil {
-			// TODO: Telegram may return retry_after, but this loop currently retries on
-			// the next poll, so a short PollInterval may retry sooner than requested.
-			return fmt.Errorf("send telegram message for %s: %w", thread.ID, err)
-		}
-
-		record.NotifiedNewAt = &now
-		if err := s.store.UpsertThread(ctx, record); err != nil {
-			s.logger.Printf("warning: thread %s was sent but could not be marked notified: %v", thread.ID, err)
-		}
-
-		newThreads++
-	}
-
-	s.logger.Printf("sync complete: %d threads seen, %d new notifications", len(catalog.Threads), newThreads)
 	return nil
 }

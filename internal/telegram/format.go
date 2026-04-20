@@ -19,6 +19,13 @@ func FormatNotification(baseURL string, thread ptchan.Thread, minReplyPosts int,
 	return strings.Join(parts, "\n")
 }
 
+func FormatMiauNotification(pageURL string) string {
+	return strings.Join([]string{
+		"<b>Miau stream live</b>",
+		html.EscapeString(pageURL),
+	}, "\n")
+}
+
 func notificationSummary(thread ptchan.Thread, minReplyPosts int, now time.Time) string {
 	parts := []string{pluralize(thread.ReplyPosts, "reply")}
 	if thread.ReplyFiles > 0 {

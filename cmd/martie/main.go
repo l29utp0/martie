@@ -9,6 +9,7 @@ import (
 	"syscall"
 
 	"martie/internal/app"
+	"martie/internal/miau"
 	"martie/internal/ptchan"
 	"martie/internal/state"
 	"martie/internal/telegram"
@@ -48,7 +49,7 @@ func main() {
 
 	switch command {
 	case "run":
-		if err := app.Run(ctx, cfg, store, ptchanClient, telegram.NewClient(cfg.TelegramBotToken), logger); err != nil {
+		if err := app.Run(ctx, cfg, store, miau.NewClient(), ptchanClient, telegram.NewClient(cfg.TelegramBotToken), logger); err != nil {
 			log.Fatalf("run service: %v", err)
 		}
 	case "snapshot":
