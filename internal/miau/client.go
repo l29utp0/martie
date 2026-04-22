@@ -20,12 +20,12 @@ type Channel struct {
 var Channels = []Channel{
 	{
 		Key:      "oficial",
-		ProbeURL: "https://stream-eu.bfcdn.host/app/031304855496+miau/llhls.m3u8",
+		ProbeURL: "https://stream-global.bfcdn.host/app/031304855496+miau/llhls.m3u8",
 		PageURL:  "https://miau.gg/oficial",
 	},
 	{
 		Key:      "l29utp0",
-		ProbeURL: "https://stream-eu.bfcdn.host/app/031304855496+l29utp0/llhls.m3u8",
+		ProbeURL: "https://stream-global.bfcdn.host/app/031304855496+l29utp0/llhls.m3u8",
 		PageURL:  "https://miau.gg/l29utp0",
 	},
 }
