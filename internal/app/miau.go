@@ -13,7 +13,7 @@ const miauEndMissThreshold = 2
 
 func (s bot) syncMiau(ctx context.Context) error {
 	for _, channel := range miau.Channels {
-		started, err := s.miau.StreamStarted(ctx, channel)
+		started, err := s.miau.HasStreamStarted(ctx, channel)
 		if err != nil {
 			return fmt.Errorf("check miau stream %s: %w", channel.Key, err)
 		}

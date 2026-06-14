@@ -13,6 +13,7 @@ type Config struct {
 	TelegramBotToken string
 	TelegramChatID   int64
 	PtchanBaseURL    string
+	MetricsAddr      string
 	PollInterval     time.Duration
 	SQLitePath       string
 	MinReplyPosts    int
@@ -29,6 +30,7 @@ func LoadConfig() (Config, error) {
 	}
 
 	cfg.TelegramBotToken = strings.TrimSpace(os.Getenv("TELEGRAM_BOT_TOKEN"))
+	cfg.MetricsAddr = strings.TrimSpace(os.Getenv("METRICS_ADDR"))
 
 	if raw := strings.TrimSpace(os.Getenv("TELEGRAM_CHAT_ID")); raw != "" {
 		chatID, err := strconv.ParseInt(raw, 10, 64)

@@ -14,7 +14,7 @@ type Client struct {
 	http    *http.Client
 }
 
-func NewClient(baseURL string) *Client {
+func New(baseURL string) *Client {
 	return &Client{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		http: &http.Client{
@@ -61,8 +61,4 @@ func (c *Client) FetchCatalog(ctx context.Context) (Catalog, error) {
 	}
 
 	return catalog, nil
-}
-
-func ThreadURL(baseURL, board string, postID int64) string {
-	return fmt.Sprintf("%s/%s/thread/%d.html", strings.TrimRight(baseURL, "/"), board, postID)
 }

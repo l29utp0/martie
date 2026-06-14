@@ -4,6 +4,7 @@ BOT_ENV ?= dev
 ENV_FILE ?= .env.$(BOT_ENV)
 CONTAINER ?= martie-$(BOT_ENV)
 VOLUME ?= martie-$(BOT_ENV)-data
+DOCKER_RUN_EXTRA ?=
 GO_BUILD_FLAGS ?= -trimpath -buildvcs=false
 LOAD_ENV = set -a; . ./$(ENV_FILE); set +a; \
 	BOT_ENV=$(BOT_ENV); \
@@ -55,6 +56,7 @@ docker-run:
 		--name $(CONTAINER) \
 		--restart unless-stopped \
 		$(DOCKER_RUN_FLAGS) \
+		$(DOCKER_RUN_EXTRA) \
 		$(IMAGE)
 
 docker-snapshot:
@@ -68,6 +70,7 @@ docker-deploy: docker-build
 		--name $(CONTAINER) \
 		--restart unless-stopped \
 		$(DOCKER_RUN_FLAGS) \
+		$(DOCKER_RUN_EXTRA) \
 		$(IMAGE)
 
 docker-logs:

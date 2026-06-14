@@ -30,7 +30,7 @@ var Channels = []Channel{
 	},
 }
 
-func NewClient() *Client {
+func New() *Client {
 	return &Client{
 		http: &http.Client{
 			Timeout: 20 * time.Second,
@@ -38,7 +38,7 @@ func NewClient() *Client {
 	}
 }
 
-func (c *Client) StreamStarted(ctx context.Context, channel Channel) (bool, error) {
+func (c *Client) HasStreamStarted(ctx context.Context, channel Channel) (bool, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, channel.ProbeURL, nil)
 	if err != nil {
 		return false, fmt.Errorf("create request: %w", err)

@@ -14,7 +14,7 @@ func FormatNotification(baseURL string, thread ptchan.Thread, minReplyPosts int,
 
 	parts = append(parts, "<b>"+html.EscapeString(fmt.Sprintf("/%s/ #%d", thread.Board, thread.PostID))+"</b>")
 	parts = append(parts, "<i>"+html.EscapeString(notificationSummary(thread, minReplyPosts, now))+"</i>")
-	parts = append(parts, html.EscapeString(ptchan.ThreadURL(baseURL, thread.Board, thread.PostID)))
+	parts = append(parts, fmt.Sprintf("%s/%s/thread/%d.html", strings.TrimRight(baseURL, "/"), thread.Board, thread.PostID))
 
 	return strings.Join(parts, "\n")
 }

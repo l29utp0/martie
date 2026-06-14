@@ -9,10 +9,11 @@ It stays intentionally small:
 - tracks seen threads in SQLite
 - sends Telegram messages for new matches
 - sends Telegram messages when configured `miau` streams go live
+- optionally exposes Prometheus metrics
 - stores only the state it needs
 
 - no webhook
-- no inbound HTTP server
+- no inbound API beyond optional `/metrics`
 - no Telegram commands
 - no full-thread fetches
 
@@ -23,6 +24,7 @@ Copy `.env.example` to `.env.dev` and `.env.prod`, then fill in:
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_CHAT_ID`
 - `PTCHAN_BASE_URL`
+- `METRICS_ADDR`
 - `POLL_INTERVAL_SECONDS`
 - `SQLITE_PATH`
 - `MIN_REPLY_POSTS`
@@ -34,6 +36,9 @@ Copy `.env.example` to `.env.dev` and `.env.prod`, then fill in:
 Make targets default to `BOT_ENV=dev`. Use `BOT_ENV=prod` for `.env.prod`.
 
 If `SQLITE_PATH` is blank, local runs use `data/dev.db` or `data/prod.db`.
+
+Set `METRICS_ADDR` to enable a Prometheus scrape endpoint at `/metrics`, for example `:9090`.
+Metrics are updated from martie's normal poll loop.
 
 ## Local Run
 
@@ -85,7 +90,13 @@ make docker-clean
 
 Docker uses the same `BOT_ENV` selection as local runs. SQLite always lives at `/data/bot.db` in the container, backed by a named Docker volume such as `martie-prod-data`, so state survives redeploys.
 
-The image is a static `scratch` runtime with CA certificates, a non-root user, no exposed ports, and SQLite state under `/data`. Secrets stay in the runtime environment.
+To publish the metrics endpoint from Docker, set `METRICS_ADDR=:9090` and pass a port mapping:
+
+```bash
+make docker-run BOT_ENV=prod DOCKER_RUN_EXTRA='-p 127.0.0.1:9090:9090'
+```
+
+The image is a static `scratch` runtime with CA certificates, a non-root user, no default exposed ports, and SQLite state under `/data`. Secrets stay in the runtime environment.
 
 ## Behavior
 

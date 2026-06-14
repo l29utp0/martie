@@ -15,6 +15,8 @@ func (s bot) syncPtchan(ctx context.Context) error {
 	}
 
 	now := time.Now().UTC()
+	s.metrics.observePtchanCatalog(catalog, s.cfg, now)
+
 	newThreads := 0
 
 	for _, thread := range catalog.Threads {
@@ -57,6 +59,7 @@ func (s bot) syncPtchan(ctx context.Context) error {
 		newThreads++
 	}
 
+	s.metrics.addPtchanNotifications(newThreads)
 	s.logger.Printf("ptchan sync complete: %d threads seen, %d new notifications", len(catalog.Threads), newThreads)
 	return nil
 }

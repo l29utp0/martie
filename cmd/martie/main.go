@@ -41,7 +41,7 @@ func main() {
 	}
 	defer store.Close()
 
-	ptchanClient := ptchan.NewClient(cfg.PtchanBaseURL)
+	ptchanClient := ptchan.New(cfg.PtchanBaseURL)
 	logger := log.New(os.Stdout, "", log.LstdFlags|log.LUTC)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -49,7 +49,7 @@ func main() {
 
 	switch command {
 	case "run":
-		if err := app.Run(ctx, cfg, store, miau.NewClient(), ptchanClient, telegram.NewClient(cfg.TelegramBotToken), logger); err != nil {
+		if err := app.Run(ctx, cfg, store, miau.New(), ptchanClient, telegram.NewClient(cfg.TelegramBotToken), logger); err != nil {
 			log.Fatalf("run service: %v", err)
 		}
 	case "snapshot":
