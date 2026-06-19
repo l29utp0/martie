@@ -16,25 +16,33 @@ type metrics struct {
 
 	pollSuccessTotal uint64
 	pollErrorTotal   uint64
-	lastPollDuration float64
-	lastPollSuccess  bool
 
-	ptchanLastSuccessfulPoll time.Time
-	ptchanThreads            int
-	ptchanTrackedThreads     int
-	ptchanReplyPosts         int
-	ptchanReplyFiles         int
-	ptchanThreadsByBoard     map[string]int
-	ptchanReplyPostsByBoard  map[string]int
-	ptchanReplyFilesByBoard  map[string]int
-	ptchanNotificationsSent  uint64
+	lastPollDuration       float64
+	lastPollSuccess        bool
+	lastSuccessfulPollTime time.Time
+
+	threadsByBoard        map[string]int
+	trackedThreadsByBoard map[string]int
+	replyPostsByBoard     map[string]int
+	replyFilesByBoard     map[string]int
+	threadAgeByBoard      map[string]float64
+	bumpAgeByBoard        map[string]float64
+	oldestThreadByBoard   map[string]float64
+	oldestBumpByBoard     map[string]float64
+
+	notificationsSent uint64
 }
 
 func newMetrics() *metrics {
 	return &metrics{
-		ptchanThreadsByBoard:    make(map[string]int),
-		ptchanReplyPostsByBoard: make(map[string]int),
-		ptchanReplyFilesByBoard: make(map[string]int),
+		threadsByBoard:        make(map[string]int),
+		trackedThreadsByBoard: make(map[string]int),
+		replyPostsByBoard:     make(map[string]int),
+		replyFilesByBoard:     make(map[string]int),
+		threadAgeByBoard:      make(map[string]float64),
+		bumpAgeByBoard:        make(map[string]float64),
+		oldestThreadByBoard:   make(map[string]float64),
+		oldestBumpByBoard:     make(map[string]float64),
 	}
 }
 
@@ -52,52 +60,70 @@ func (m *metrics) observePoll(duration time.Duration, err error) {
 	m.pollErrorTotal++
 }
 
-func (m *metrics) observePtchanCatalog(catalog ptchan.Catalog, cfg Config, now time.Time) {
+func (m *metrics) observeCatalog(catalog ptchan.Catalog, cfg Config, now time.Time) {
 	threadsByBoard := make(map[string]int)
+	trackedThreadsByBoard := make(map[string]int)
 	replyPostsByBoard := make(map[string]int)
 	replyFilesByBoard := make(map[string]int)
-	replyPosts := 0
-	replyFiles := 0
-	trackedThreads := 0
+	threadAgeByBoard := make(map[string]float64)
+	bumpAgeByBoard := make(map[string]float64)
+	oldestThreadByBoard := make(map[string]float64)
+	oldestBumpByBoard := make(map[string]float64)
+	threadAgeCounts := make(map[string]int)
+	bumpAgeCounts := make(map[string]int)
 
 	for _, thread := range catalog.Threads {
-		replyPosts += thread.ReplyPosts
-		replyFiles += thread.ReplyFiles
 		threadsByBoard[thread.Board]++
 		replyPostsByBoard[thread.Board] += thread.ReplyPosts
 		replyFilesByBoard[thread.Board] += thread.ReplyFiles
-		if threadAllowed(cfg, thread, now) {
-			trackedThreads++
+
+		if !thread.Date.IsZero() {
+			age := now.Sub(thread.Date).Seconds()
+			threadAgeByBoard[thread.Board] += age
+			threadAgeCounts[thread.Board]++
+			oldestThreadByBoard[thread.Board] = max(oldestThreadByBoard[thread.Board], age)
 		}
+		if !thread.Bumped.IsZero() {
+			age := now.Sub(thread.Bumped).Seconds()
+			bumpAgeByBoard[thread.Board] += age
+			bumpAgeCounts[thread.Board]++
+			oldestBumpByBoard[thread.Board] = max(oldestBumpByBoard[thread.Board], age)
+		}
+
+		if threadAllowed(cfg, thread, now) {
+			trackedThreadsByBoard[thread.Board]++
+		}
+	}
+
+	for board, count := range threadAgeCounts {
+		threadAgeByBoard[board] /= float64(count)
+	}
+	for board, count := range bumpAgeCounts {
+		bumpAgeByBoard[board] /= float64(count)
 	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.ptchanLastSuccessfulPoll = now
-	m.ptchanThreads = len(catalog.Threads)
-	m.ptchanTrackedThreads = trackedThreads
-	m.ptchanReplyPosts = replyPosts
-	m.ptchanReplyFiles = replyFiles
-	for board, count := range threadsByBoard {
-		m.ptchanThreadsByBoard[board] = count
-	}
-	for board, count := range replyPostsByBoard {
-		m.ptchanReplyPostsByBoard[board] = count
-	}
-	for board, count := range replyFilesByBoard {
-		m.ptchanReplyFilesByBoard[board] = count
-	}
+	m.lastSuccessfulPollTime = now
+	m.threadsByBoard = threadsByBoard
+	m.trackedThreadsByBoard = trackedThreadsByBoard
+	m.replyPostsByBoard = replyPostsByBoard
+	m.replyFilesByBoard = replyFilesByBoard
+	m.threadAgeByBoard = threadAgeByBoard
+	m.bumpAgeByBoard = bumpAgeByBoard
+	m.oldestThreadByBoard = oldestThreadByBoard
+	m.oldestBumpByBoard = oldestBumpByBoard
 }
 
-func (m *metrics) addPtchanNotifications(count int) {
+func (m *metrics) addNotifications(count int) {
 	if count == 0 {
 		return
 	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.ptchanNotificationsSent += uint64(count)
+	m.notificationsSent += uint64(count)
 }
 
 func (m *metrics) render() string {
@@ -112,20 +138,21 @@ func (m *metrics) render() string {
 	writeGauge(&builder, "martie_last_poll_success", "Whether the last martie poll cycle succeeded.", nil, boolFloat(m.lastPollSuccess))
 	writeGauge(&builder, "martie_last_poll_duration_seconds", "Duration of the last martie poll cycle.", nil, m.lastPollDuration)
 
-	writeGauge(&builder, "martie_ptchan_catalog_threads", "Threads in the most recent ptchan catalog poll.", nil, float64(m.ptchanThreads))
-	writeGauge(&builder, "martie_ptchan_tracked_threads", "Threads from the most recent ptchan catalog poll that match martie filters.", nil, float64(m.ptchanTrackedThreads))
-	writeGauge(&builder, "martie_ptchan_catalog_reply_posts", "Reply posts in the most recent ptchan catalog poll.", nil, float64(m.ptchanReplyPosts))
-	writeGauge(&builder, "martie_ptchan_catalog_reply_files", "Reply files in the most recent ptchan catalog poll.", nil, float64(m.ptchanReplyFiles))
-	writeGauge(&builder, "martie_ptchan_last_successful_poll_timestamp_seconds", "Unix timestamp for the last successful ptchan catalog poll.", nil, timestampSeconds(m.ptchanLastSuccessfulPoll))
-	writeCounter(&builder, "martie_ptchan_notifications_sent_total", "Ptchan Telegram notifications sent by this martie process.", nil, float64(m.ptchanNotificationsSent))
-	writeGaugeMap(&builder, "martie_ptchan_catalog_threads_by_board", "Threads in the most recent ptchan catalog poll by board.", "board", m.ptchanThreadsByBoard)
-	writeGaugeMap(&builder, "martie_ptchan_catalog_reply_posts_by_board", "Reply posts in the most recent ptchan catalog poll by board.", "board", m.ptchanReplyPostsByBoard)
-	writeGaugeMap(&builder, "martie_ptchan_catalog_reply_files_by_board", "Reply files in the most recent ptchan catalog poll by board.", "board", m.ptchanReplyFilesByBoard)
+	writeGauge(&builder, "martie_catalog_last_successful_poll_timestamp_seconds", "Unix timestamp for the last successful catalog poll.", nil, timestampSeconds(m.lastSuccessfulPollTime))
+	writeCounter(&builder, "martie_notifications_sent_total", "Notifications sent by this martie process.", nil, float64(m.notificationsSent))
+	writeGaugeMap(&builder, "martie_catalog_threads", "Threads in the most recent catalog poll.", "board", m.threadsByBoard)
+	writeGaugeMap(&builder, "martie_catalog_tracked_threads", "Threads from the most recent catalog poll that match martie filters.", "board", m.trackedThreadsByBoard)
+	writeGaugeMap(&builder, "martie_catalog_reply_posts", "Reply posts in the most recent catalog poll.", "board", m.replyPostsByBoard)
+	writeGaugeMap(&builder, "martie_catalog_reply_files", "Reply files in the most recent catalog poll.", "board", m.replyFilesByBoard)
+	writeGaugeMap(&builder, "martie_catalog_average_thread_age_seconds", "Average age of threads in the most recent catalog poll.", "board", m.threadAgeByBoard)
+	writeGaugeMap(&builder, "martie_catalog_average_bump_age_seconds", "Average time since the last bump for threads in the most recent catalog poll.", "board", m.bumpAgeByBoard)
+	writeGaugeMap(&builder, "martie_catalog_oldest_thread_age_seconds", "Age of the oldest thread in the most recent catalog poll.", "board", m.oldestThreadByBoard)
+	writeGaugeMap(&builder, "martie_catalog_oldest_bump_age_seconds", "Time since the oldest bump in the most recent catalog poll.", "board", m.oldestBumpByBoard)
 
 	return builder.String()
 }
 
-func writeGaugeMap(builder *strings.Builder, name, help, label string, values map[string]int) {
+func writeGaugeMap[V int | float64](builder *strings.Builder, name, help, label string, values map[string]V) {
 	writeHelp(builder, name, help, "gauge")
 	for _, key := range sortedKeys(values) {
 		writeMetric(builder, name, map[string]string{label: key}, float64(values[key]))
