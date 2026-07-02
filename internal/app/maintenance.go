@@ -10,17 +10,17 @@ import (
 	"martie/internal/state"
 )
 
-func Snapshot(ctx context.Context, cfg Config, store *state.Store, ptchan *ptchan.Client, logger *log.Logger) error {
-	return bot{
-		cfg:    cfg,
+func Snapshot(ctx context.Context, cfg Config, store *state.Store, client *ptchan.Client, logger *log.Logger) error {
+	return catalogWatcher{
+		cfg:    cfg.Catalog,
 		store:  store,
-		ptchan: ptchan,
+		client: client,
 		logger: logger,
 	}.snapshot(ctx)
 }
 
-func (s bot) snapshot(ctx context.Context) error {
-	catalog, err := s.ptchan.FetchCatalog(ctx)
+func (s catalogWatcher) snapshot(ctx context.Context) error {
+	catalog, err := s.client.FetchCatalog(ctx)
 	if err != nil {
 		return fmt.Errorf("fetch catalog for snapshot: %w", err)
 	}
@@ -30,11 +30,17 @@ func (s bot) snapshot(ctx context.Context) error {
 	handled := 0
 
 	for _, thread := range catalog.Threads {
-		if !threadAllowed(s.cfg, thread, now) {
+		if !s.cfg.Filter.Allows(thread, now) {
 			continue
 		}
 
+		existing, _, err := s.store.GetThread(ctx, thread.ID)
+		if err != nil {
+			return fmt.Errorf("load thread %s for snapshot: %w", thread.ID, err)
+		}
+
 		record := recordFromThread(thread, now)
+		record.NotifiedNewAt = existing.NotifiedNewAt
 		if thread.ReplyPosts >= s.cfg.MinReplyPosts {
 			// Snapshot marks already-eligible threads as handled without suppressing
 			// existing low-reply threads that may cross the threshold later.
@@ -51,7 +57,7 @@ func (s bot) snapshot(ctx context.Context) error {
 	return nil
 }
 
-func (s bot) prune(ctx context.Context) error {
+func (s catalogWatcher) prune(ctx context.Context) error {
 	if s.cfg.PruneAfter == 0 {
 		return nil
 	}

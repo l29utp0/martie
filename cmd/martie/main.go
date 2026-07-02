@@ -27,21 +27,21 @@ func main() {
 	}
 
 	if command == "run" {
-		if cfg.TelegramBotToken == "" {
+		if cfg.Telegram.BotToken == "" {
 			log.Fatalf("load config: TELEGRAM_BOT_TOKEN is required")
 		}
-		if cfg.TelegramChatID == 0 {
+		if cfg.Telegram.ChatID == 0 {
 			log.Fatalf("load config: TELEGRAM_CHAT_ID is required")
 		}
 	}
 
-	store, err := state.Open(cfg.SQLitePath)
+	store, err := state.Open(cfg.Storage.SQLitePath)
 	if err != nil {
 		log.Fatalf("open sqlite: %v", err)
 	}
 	defer store.Close()
 
-	ptchanClient := ptchan.New(cfg.PtchanBaseURL)
+	ptchanClient := ptchan.New(cfg.Catalog.BaseURL)
 	logger := log.New(os.Stdout, "", log.LstdFlags|log.LUTC)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -49,7 +49,7 @@ func main() {
 
 	switch command {
 	case "run":
-		if err := app.Run(ctx, cfg, store, miau.New(), ptchanClient, telegram.NewClient(cfg.TelegramBotToken), logger); err != nil {
+		if err := app.Run(ctx, cfg, store, miau.New(), ptchanClient, telegram.New(cfg.Telegram.BotToken), logger); err != nil {
 			log.Fatalf("run service: %v", err)
 		}
 	case "snapshot":

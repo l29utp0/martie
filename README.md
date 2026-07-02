@@ -8,7 +8,7 @@ It stays intentionally small:
 - polls `https://ptchan.org/catalog.json`
 - tracks seen threads in SQLite
 - sends Telegram messages for new matches
-- sends Telegram messages when configured `miau` streams go live
+- sends Telegram messages when its default `miau` streams go live
 - optionally exposes Prometheus metrics
 - stores only the state it needs
 
@@ -19,26 +19,44 @@ It stays intentionally small:
 
 ## Config
 
-Copy `.env.example` to `.env.dev` and `.env.prod`, then fill in:
+Copy `.env.example` to `.env.dev` and `.env.prod`, then fill in the settings you need.
+Configuration is grouped by concern:
+
+- Telegram:
+  - `TELEGRAM_BOT_TOKEN`
+  - `TELEGRAM_CHAT_ID`
+- Catalog:
+  - `PTCHAN_BASE_URL`
+  - `MIN_REPLY_POSTS`
+  - `BOARD_DENYLIST`
+  - `KEYWORD_DENYLIST`
+  - `MAX_THREAD_AGE_HOURS`
+  - `PRUNE_AFTER_HOURS`
+- Runtime:
+  - `POLL_INTERVAL_SECONDS`
+  - `METRICS_ADDR`
+- Storage:
+  - `SQLITE_PATH`
+
+The required settings for `run` are:
 
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_CHAT_ID`
-- `PTCHAN_BASE_URL`
-- `METRICS_ADDR`
-- `POLL_INTERVAL_SECONDS`
-- `SQLITE_PATH`
-- `MIN_REPLY_POSTS`
-- `BOARD_DENYLIST`
-- `KEYWORD_DENYLIST`
-- `MAX_THREAD_AGE_HOURS`
-- `PRUNE_AFTER_HOURS`
 
 Make targets default to `BOT_ENV=dev`. Use `BOT_ENV=prod` for `.env.prod`.
 
 If `SQLITE_PATH` is blank, local runs use `data/dev.db` or `data/prod.db`.
 
 Set `METRICS_ADDR` to enable a Prometheus scrape endpoint at `/metrics`, for example `:9090`.
-Metrics are updated from martie's normal poll loop.
+Workflow health is labeled by `workflow` (`catalog` or `streams`), notification counts use the same values in `source`, and catalog gauges are labeled by `board`.
+The principal metric families are:
+
+- `martie_workflow_runs_total`
+- `martie_workflow_duration_seconds`
+- `martie_workflow_last_success`
+- `martie_workflow_last_successful_timestamp_seconds`
+- `martie_notifications_sent_total`
+- `martie_ptchan_catalog_*`
 
 ## Local Run
 
@@ -62,6 +80,7 @@ make snapshot
 
 ## Build
 
+Local builds require Go 1.25 or newer.
 `make build` uses Go's `-trimpath` and `-buildvcs=false` flags so release binaries do not embed your local filesystem path or repo state.
 
 ## Docker
@@ -106,7 +125,9 @@ The image is a static `scratch` runtime with CA certificates, a non-root user, n
 - `make snapshot` stores the current catalog and marks only threads that already meet `MIN_REPLY_POSTS` as handled.
 - `BOARD_DENYLIST`, `KEYWORD_DENYLIST`, `MAX_THREAD_AGE_HOURS`, and `PRUNE_AFTER_HOURS` filter what is tracked and how long it stays in SQLite.
 - New threads are stored before send; if Telegram accepts a message but the follow-up SQLite write fails, that notification may be retried on the next poll.
-- `miau` stream checks treat a live URL as active until it returns `404` for 2 consecutive poll cycles.
+- Ptchan and miau polling run independently; a failure in one does not stop the other.
+- The default miau channels are `oficial` and `l29utp0`.
+- Miau stream checks treat a live URL as active until it returns `404` for 2 consecutive poll cycles.
 
 ## License
 

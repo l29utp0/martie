@@ -43,6 +43,7 @@ func Open(path string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
 	}
+	db.SetMaxOpenConns(1)
 
 	store := &Store{db: db}
 	if err := store.initSchema(context.Background()); err != nil {

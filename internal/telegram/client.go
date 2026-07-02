@@ -3,6 +3,7 @@ package telegram
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,7 +17,7 @@ type Client struct {
 	http    *http.Client
 }
 
-func NewClient(botToken string) *Client {
+func New(botToken string) *Client {
 	return &Client{
 		baseURL: fmt.Sprintf("https://api.telegram.org/bot%s", botToken),
 		http: &http.Client{
@@ -25,16 +26,18 @@ func NewClient(botToken string) *Client {
 	}
 }
 
-// SendMessage uses the Bot API sendMessage method:
+// Send uses the Bot API sendMessage method:
 // https://core.telegram.org/bots/api#sendmessage
 //
 // We rely on Telegram's default link preview behavior described here:
 // https://core.telegram.org/bots/api#linkpreviewoptions
-func (c *Client) SendMessage(ctx context.Context, chatID int64, text string) error {
+func (c *Client) Send(ctx context.Context, chatID int64, message OutgoingMessage) error {
 	form := url.Values{}
 	form.Set("chat_id", fmt.Sprintf("%d", chatID))
-	form.Set("text", text)
-	form.Set("parse_mode", "HTML")
+	form.Set("text", message.text)
+	if message.parseMode != "" {
+		form.Set("parse_mode", message.parseMode)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/sendMessage", strings.NewReader(form.Encode()))
 	if err != nil {
@@ -44,6 +47,10 @@ func (c *Client) SendMessage(ctx context.Context, chatID int64, text string) err
 
 	resp, err := c.http.Do(req)
 	if err != nil {
+		var requestError *url.Error
+		if errors.As(err, &requestError) {
+			err = requestError.Err
+		}
 		return fmt.Errorf("send request: %w", err)
 	}
 	defer resp.Body.Close()

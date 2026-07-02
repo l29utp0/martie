@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-func TestClientSendMessage(t *testing.T) {
+func TestClientSend(t *testing.T) {
 	var gotRequest *http.Request
 
 	client := &Client{
@@ -28,9 +28,9 @@ func TestClientSendMessage(t *testing.T) {
 		},
 	}
 
-	err := client.SendMessage(context.Background(), 12345, "<b>Hello</b>")
+	err := client.Send(context.Background(), 12345, HTMLMessage("<b>Hello</b>"))
 	if err != nil {
-		t.Fatalf("SendMessage() error = %v", err)
+		t.Fatalf("Send() error = %v", err)
 	}
 	if gotRequest == nil {
 		t.Fatal("request was not sent")
@@ -66,7 +66,7 @@ func TestClientSendMessage(t *testing.T) {
 	}
 }
 
-func TestClientSendMessageAPIFailure(t *testing.T) {
+func TestClientSendAPIFailure(t *testing.T) {
 	client := &Client{
 		baseURL: "https://api.telegram.org/bottoken",
 		http: &http.Client{
@@ -81,12 +81,12 @@ func TestClientSendMessageAPIFailure(t *testing.T) {
 		},
 	}
 
-	err := client.SendMessage(context.Background(), 12345, "hello")
+	err := client.Send(context.Background(), 12345, TextMessage("hello"))
 	if err == nil {
-		t.Fatal("SendMessage() error = nil, want non-nil")
+		t.Fatal("Send() error = nil, want non-nil")
 	}
 	if !strings.Contains(err.Error(), `"description":"chat not found"`) {
-		t.Fatalf("SendMessage() error = %q, want to contain %q", err, `"description":"chat not found"`)
+		t.Fatalf("Send() error = %q, want to contain %q", err, `"description":"chat not found"`)
 	}
 }
 

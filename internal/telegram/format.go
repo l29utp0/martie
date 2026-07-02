@@ -5,28 +5,51 @@ import (
 	"html"
 	"strings"
 	"time"
-
-	"martie/internal/ptchan"
 )
 
-func FormatNotification(baseURL string, thread ptchan.Thread, minReplyPosts int, now time.Time) string {
+type OutgoingMessage struct {
+	text      string
+	parseMode string
+}
+
+type ThreadNotice struct {
+	Board      string
+	PostID     int64
+	Date       time.Time
+	ReplyPosts int
+	ReplyFiles int
+}
+
+type MiauStreamNotice struct {
+	PageURL string
+}
+
+func TextMessage(text string) OutgoingMessage {
+	return OutgoingMessage{text: text}
+}
+
+func HTMLMessage(text string) OutgoingMessage {
+	return OutgoingMessage{text: text, parseMode: "HTML"}
+}
+
+func FormatThreadNotification(baseURL string, thread ThreadNotice, minReplyPosts int, now time.Time) OutgoingMessage {
 	var parts []string
 
 	parts = append(parts, "<b>"+html.EscapeString(fmt.Sprintf("/%s/ #%d", thread.Board, thread.PostID))+"</b>")
 	parts = append(parts, "<i>"+html.EscapeString(notificationSummary(thread, minReplyPosts, now))+"</i>")
 	parts = append(parts, fmt.Sprintf("%s/%s/thread/%d.html", strings.TrimRight(baseURL, "/"), thread.Board, thread.PostID))
 
-	return strings.Join(parts, "\n")
+	return HTMLMessage(strings.Join(parts, "\n"))
 }
 
-func FormatMiauNotification(pageURL string) string {
-	return strings.Join([]string{
+func FormatMiauStreamNotification(stream MiauStreamNotice) OutgoingMessage {
+	return HTMLMessage(strings.Join([]string{
 		"<b>🔴 Miau stream live</b>",
-		html.EscapeString(pageURL),
-	}, "\n")
+		html.EscapeString(stream.PageURL),
+	}, "\n"))
 }
 
-func notificationSummary(thread ptchan.Thread, minReplyPosts int, now time.Time) string {
+func notificationSummary(thread ThreadNotice, minReplyPosts int, now time.Time) string {
 	parts := []string{pluralize(thread.ReplyPosts, "reply")}
 	if thread.ReplyFiles > 0 {
 		parts = append(parts, pluralize(thread.ReplyFiles, "file"))
@@ -37,7 +60,7 @@ func notificationSummary(thread ptchan.Thread, minReplyPosts int, now time.Time)
 	return strings.Join(parts, ", ")
 }
 
-func thresholdReachedLabel(thread ptchan.Thread, minReplyPosts int, now time.Time) string {
+func thresholdReachedLabel(thread ThreadNotice, minReplyPosts int, now time.Time) string {
 	if minReplyPosts <= 1 || thread.Date.IsZero() || thread.ReplyPosts < minReplyPosts {
 		return ""
 	}

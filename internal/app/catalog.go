@@ -8,8 +8,15 @@ import (
 	"martie/internal/telegram"
 )
 
-func (s bot) syncPtchan(ctx context.Context) error {
-	catalog, err := s.ptchan.FetchCatalog(ctx)
+func (s catalogWatcher) poll(ctx context.Context) error {
+	if err := s.sync(ctx); err != nil {
+		return err
+	}
+	return s.prune(ctx)
+}
+
+func (s catalogWatcher) sync(ctx context.Context) error {
+	catalog, err := s.client.FetchCatalog(ctx)
 	if err != nil {
 		return fmt.Errorf("fetch catalog: %w", err)
 	}
@@ -20,7 +27,7 @@ func (s bot) syncPtchan(ctx context.Context) error {
 	newThreads := 0
 
 	for _, thread := range catalog.Threads {
-		if !threadAllowed(s.cfg, thread, now) {
+		if !s.cfg.Filter.Allows(thread, now) {
 			continue
 		}
 
@@ -44,8 +51,14 @@ func (s bot) syncPtchan(ctx context.Context) error {
 			continue
 		}
 
-		message := telegram.FormatNotification(s.cfg.PtchanBaseURL, thread, s.cfg.MinReplyPosts, now)
-		if err := s.telegram.SendMessage(ctx, s.cfg.TelegramChatID, message); err != nil {
+		message := telegram.FormatThreadNotification(s.cfg.BaseURL, telegram.ThreadNotice{
+			Board:      thread.Board,
+			PostID:     thread.PostID,
+			Date:       thread.Date,
+			ReplyPosts: thread.ReplyPosts,
+			ReplyFiles: thread.ReplyFiles,
+		}, s.cfg.MinReplyPosts, now)
+		if err := s.telegram.Send(ctx, s.chatID, message); err != nil {
 			// TODO: Telegram may return retry_after, but this loop currently retries on
 			// the next poll, so a short PollInterval may retry sooner than requested.
 			return fmt.Errorf("send telegram message for %s: %w", thread.ID, err)
@@ -59,7 +72,7 @@ func (s bot) syncPtchan(ctx context.Context) error {
 		newThreads++
 	}
 
-	s.metrics.addNotifications(newThreads)
-	s.logger.Printf("ptchan sync complete: %d threads seen, %d new notifications", len(catalog.Threads), newThreads)
+	s.metrics.addNotifications("catalog", newThreads)
+	s.logger.Printf("catalog sync complete: %d threads seen, %d new notifications", len(catalog.Threads), newThreads)
 	return nil
 }

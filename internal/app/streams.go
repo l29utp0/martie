@@ -9,11 +9,11 @@ import (
 	"martie/internal/telegram"
 )
 
-const miauEndMissThreshold = 2
+const streamEndMissThreshold = 2
 
-func (s bot) syncMiau(ctx context.Context) error {
-	for _, channel := range miau.Channels {
-		started, err := s.miau.HasStreamStarted(ctx, channel)
+func (s streamWatcher) poll(ctx context.Context) error {
+	for _, channel := range s.channels {
+		live, err := s.client.IsLive(ctx, channel)
 		if err != nil {
 			return fmt.Errorf("check miau stream %s: %w", channel.Key, err)
 		}
@@ -23,14 +23,14 @@ func (s bot) syncMiau(ctx context.Context) error {
 			return fmt.Errorf("load miau stream %s: %w", channel.Key, err)
 		}
 
-		if started {
-			if err := s.handleStartedMiauStream(ctx, channel, stream); err != nil {
+		if live {
+			if err := s.handleStartedStream(ctx, channel, stream); err != nil {
 				return err
 			}
 			continue
 		}
 
-		if err := s.handleStoppedMiauStream(ctx, channel, stream); err != nil {
+		if err := s.handleStoppedStream(ctx, channel, stream); err != nil {
 			return err
 		}
 	}
@@ -38,7 +38,7 @@ func (s bot) syncMiau(ctx context.Context) error {
 	return nil
 }
 
-func (s bot) handleStartedMiauStream(ctx context.Context, channel miau.Channel, stream state.StreamState) error {
+func (s streamWatcher) handleStartedStream(ctx context.Context, channel miau.Channel, stream state.StreamState) error {
 	wasActive := stream.Active
 	previousMisses := stream.Consecutive404s
 	stream.Key = miauStateKey(channel.Key)
@@ -49,19 +49,20 @@ func (s bot) handleStartedMiauStream(ctx context.Context, channel miau.Channel, 
 		if previousMisses == 0 {
 			return nil
 		}
-		return s.storeMiauState(ctx, channel.Key, stream)
+		return s.storeStreamState(ctx, channel.Key, stream)
 	}
 
 	stream.LiveNotified = false
-	if err := s.storeMiauState(ctx, channel.Key, stream); err != nil {
+	if err := s.storeStreamState(ctx, channel.Key, stream); err != nil {
 		return err
 	}
 
-	message := telegram.FormatMiauNotification(channel.PageURL)
-	if err := s.telegram.SendMessage(ctx, s.cfg.TelegramChatID, message); err != nil {
+	message := telegram.FormatMiauStreamNotification(telegram.MiauStreamNotice{PageURL: channel.PageURL})
+	if err := s.telegram.Send(ctx, s.chatID, message); err != nil {
 		return fmt.Errorf("send miau telegram message for %s: %w", channel.Key, err)
 	}
 	s.logger.Printf("miau stream %s live notification sent", channel.Key)
+	s.metrics.addNotifications("streams", 1)
 
 	stream.LiveNotified = true
 	if err := s.store.UpsertStreamState(ctx, stream); err != nil {
@@ -71,24 +72,24 @@ func (s bot) handleStartedMiauStream(ctx context.Context, channel miau.Channel, 
 	return nil
 }
 
-func (s bot) handleStoppedMiauStream(ctx context.Context, channel miau.Channel, stream state.StreamState) error {
+func (s streamWatcher) handleStoppedStream(ctx context.Context, channel miau.Channel, stream state.StreamState) error {
 	if !stream.Active {
 		return nil
 	}
 
 	stream.Consecutive404s++
-	if stream.Consecutive404s < miauEndMissThreshold {
-		return s.storeMiauState(ctx, channel.Key, stream)
+	if stream.Consecutive404s < streamEndMissThreshold {
+		return s.storeStreamState(ctx, channel.Key, stream)
 	}
 
 	stream.Active = false
 	stream.LiveNotified = false
 	stream.Consecutive404s = 0
-	s.logger.Printf("miau stream %s marked offline after %d misses", channel.Key, miauEndMissThreshold)
-	return s.storeMiauState(ctx, channel.Key, stream)
+	s.logger.Printf("miau stream %s marked offline after %d misses", channel.Key, streamEndMissThreshold)
+	return s.storeStreamState(ctx, channel.Key, stream)
 }
 
-func (s bot) storeMiauState(ctx context.Context, channelKey string, stream state.StreamState) error {
+func (s streamWatcher) storeStreamState(ctx context.Context, channelKey string, stream state.StreamState) error {
 	if err := s.store.UpsertStreamState(ctx, stream); err != nil {
 		return fmt.Errorf("store miau stream %s: %w", channelKey, err)
 	}

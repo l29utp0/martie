@@ -1,222 +1,179 @@
 package app
 
 import (
-	"fmt"
-	"sort"
-	"strconv"
-	"strings"
-	"sync"
+	"net/http"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"martie/internal/ptchan"
 )
 
 type metrics struct {
-	mu sync.RWMutex
+	registry *prometheus.Registry
 
-	pollSuccessTotal uint64
-	pollErrorTotal   uint64
+	workflowRuns        *prometheus.CounterVec
+	workflowDuration    *prometheus.HistogramVec
+	workflowLastSuccess *prometheus.GaugeVec
+	workflowLastRun     *prometheus.GaugeVec
+	notifications       *prometheus.CounterVec
 
-	lastPollDuration       float64
-	lastPollSuccess        bool
-	lastSuccessfulPollTime time.Time
-
-	threadsByBoard        map[string]int
-	trackedThreadsByBoard map[string]int
-	replyPostsByBoard     map[string]int
-	replyFilesByBoard     map[string]int
-	threadAgeByBoard      map[string]float64
-	bumpAgeByBoard        map[string]float64
-	oldestThreadByBoard   map[string]float64
-	oldestBumpByBoard     map[string]float64
-
-	notificationsSent uint64
+	catalogThreads          *prometheus.GaugeVec
+	catalogTrackedThreads   *prometheus.GaugeVec
+	catalogReplyPosts       *prometheus.GaugeVec
+	catalogReplyFiles       *prometheus.GaugeVec
+	catalogAverageThreadAge *prometheus.GaugeVec
+	catalogAverageBumpAge   *prometheus.GaugeVec
+	catalogOldestThreadAge  *prometheus.GaugeVec
+	catalogOldestBumpAge    *prometheus.GaugeVec
 }
 
 func newMetrics() *metrics {
-	return &metrics{
-		threadsByBoard:        make(map[string]int),
-		trackedThreadsByBoard: make(map[string]int),
-		replyPostsByBoard:     make(map[string]int),
-		replyFilesByBoard:     make(map[string]int),
-		threadAgeByBoard:      make(map[string]float64),
-		bumpAgeByBoard:        make(map[string]float64),
-		oldestThreadByBoard:   make(map[string]float64),
-		oldestBumpByBoard:     make(map[string]float64),
+	m := &metrics{
+		registry: prometheus.NewRegistry(),
+		workflowRuns: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "martie_workflow_runs_total",
+			Help: "Completed workflow runs by result.",
+		}, []string{"workflow", "result"}),
+		workflowDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "martie_workflow_duration_seconds",
+			Help:    "Workflow run duration in seconds.",
+			Buckets: prometheus.ExponentialBuckets(0.1, 2, 12),
+		}, []string{"workflow"}),
+		workflowLastSuccess: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "martie_workflow_last_success",
+			Help: "Whether the last workflow run succeeded.",
+		}, []string{"workflow"}),
+		workflowLastRun: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "martie_workflow_last_successful_timestamp_seconds",
+			Help: "Unix timestamp of the last successful workflow run.",
+		}, []string{"workflow"}),
+		notifications: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "martie_notifications_sent_total",
+			Help: "Notifications sent by source.",
+		}, []string{"source"}),
+		catalogThreads:          newBoardGauge("martie_ptchan_catalog_threads", "Threads in the most recent catalog."),
+		catalogTrackedThreads:   newBoardGauge("martie_ptchan_catalog_tracked_threads", "Threads in the most recent catalog that match martie filters."),
+		catalogReplyPosts:       newBoardGauge("martie_ptchan_catalog_reply_posts", "Reply posts in the most recent catalog."),
+		catalogReplyFiles:       newBoardGauge("martie_ptchan_catalog_reply_files", "Reply files in the most recent catalog."),
+		catalogAverageThreadAge: newBoardGauge("martie_ptchan_catalog_average_thread_age_seconds", "Average age of threads in the most recent catalog."),
+		catalogAverageBumpAge:   newBoardGauge("martie_ptchan_catalog_average_bump_age_seconds", "Average time since the last bump in the most recent catalog."),
+		catalogOldestThreadAge:  newBoardGauge("martie_ptchan_catalog_oldest_thread_age_seconds", "Age of the oldest thread in the most recent catalog."),
+		catalogOldestBumpAge:    newBoardGauge("martie_ptchan_catalog_oldest_bump_age_seconds", "Time since the oldest bump in the most recent catalog."),
 	}
+
+	m.registry.MustRegister(
+		prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+			Name: "martie_up",
+			Help: "Whether the martie process is running.",
+		}, func() float64 { return 1 }),
+		m.workflowRuns,
+		m.workflowDuration,
+		m.workflowLastSuccess,
+		m.workflowLastRun,
+		m.notifications,
+		m.catalogThreads,
+		m.catalogTrackedThreads,
+		m.catalogReplyPosts,
+		m.catalogReplyFiles,
+		m.catalogAverageThreadAge,
+		m.catalogAverageBumpAge,
+		m.catalogOldestThreadAge,
+		m.catalogOldestBumpAge,
+	)
+
+	return m
 }
 
-func (m *metrics) observePoll(duration time.Duration, err error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+func newBoardGauge(name, help string) *prometheus.GaugeVec {
+	return prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: name,
+		Help: help,
+	}, []string{"board"})
+}
 
-	m.lastPollDuration = duration.Seconds()
-	m.lastPollSuccess = err == nil
+func (m *metrics) handler() http.Handler {
+	return promhttp.HandlerFor(m.registry, promhttp.HandlerOpts{})
+}
+
+func (m *metrics) observeWorkflow(name string, duration time.Duration, err error) {
+	result := "success"
+	success := 1.0
+	if err != nil {
+		result = "error"
+		success = 0
+	}
+
+	m.workflowRuns.WithLabelValues(name, result).Inc()
+	m.workflowDuration.WithLabelValues(name).Observe(duration.Seconds())
+	m.workflowLastSuccess.WithLabelValues(name).Set(success)
 	if err == nil {
-		m.pollSuccessTotal++
-		return
+		m.workflowLastRun.WithLabelValues(name).SetToCurrentTime()
 	}
-
-	m.pollErrorTotal++
 }
 
-func (m *metrics) observeCatalog(catalog ptchan.Catalog, cfg Config, now time.Time) {
-	threadsByBoard := make(map[string]int)
-	trackedThreadsByBoard := make(map[string]int)
-	replyPostsByBoard := make(map[string]int)
-	replyFilesByBoard := make(map[string]int)
-	threadAgeByBoard := make(map[string]float64)
-	bumpAgeByBoard := make(map[string]float64)
-	oldestThreadByBoard := make(map[string]float64)
-	oldestBumpByBoard := make(map[string]float64)
+func (m *metrics) addNotifications(source string, count int) {
+	if count > 0 {
+		m.notifications.WithLabelValues(source).Add(float64(count))
+	}
+}
+
+func (m *metrics) observeCatalog(catalog ptchan.Catalog, cfg CatalogConfig, now time.Time) {
+	threads := make(map[string]int)
+	trackedThreads := make(map[string]int)
+	replyPosts := make(map[string]int)
+	replyFiles := make(map[string]int)
+	threadAges := make(map[string]float64)
+	bumpAges := make(map[string]float64)
+	oldestThread := make(map[string]float64)
+	oldestBump := make(map[string]float64)
 	threadAgeCounts := make(map[string]int)
 	bumpAgeCounts := make(map[string]int)
 
 	for _, thread := range catalog.Threads {
-		threadsByBoard[thread.Board]++
-		replyPostsByBoard[thread.Board] += thread.ReplyPosts
-		replyFilesByBoard[thread.Board] += thread.ReplyFiles
+		threads[thread.Board]++
+		replyPosts[thread.Board] += thread.ReplyPosts
+		replyFiles[thread.Board] += thread.ReplyFiles
 
 		if !thread.Date.IsZero() {
 			age := now.Sub(thread.Date).Seconds()
-			threadAgeByBoard[thread.Board] += age
+			threadAges[thread.Board] += age
 			threadAgeCounts[thread.Board]++
-			oldestThreadByBoard[thread.Board] = max(oldestThreadByBoard[thread.Board], age)
+			oldestThread[thread.Board] = max(oldestThread[thread.Board], age)
 		}
 		if !thread.Bumped.IsZero() {
 			age := now.Sub(thread.Bumped).Seconds()
-			bumpAgeByBoard[thread.Board] += age
+			bumpAges[thread.Board] += age
 			bumpAgeCounts[thread.Board]++
-			oldestBumpByBoard[thread.Board] = max(oldestBumpByBoard[thread.Board], age)
+			oldestBump[thread.Board] = max(oldestBump[thread.Board], age)
 		}
 
-		if threadAllowed(cfg, thread, now) {
-			trackedThreadsByBoard[thread.Board]++
+		if cfg.Filter.Allows(thread, now) {
+			trackedThreads[thread.Board]++
 		}
 	}
 
 	for board, count := range threadAgeCounts {
-		threadAgeByBoard[board] /= float64(count)
+		threadAges[board] /= float64(count)
 	}
 	for board, count := range bumpAgeCounts {
-		bumpAgeByBoard[board] /= float64(count)
+		bumpAges[board] /= float64(count)
 	}
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	m.lastSuccessfulPollTime = now
-	m.threadsByBoard = threadsByBoard
-	m.trackedThreadsByBoard = trackedThreadsByBoard
-	m.replyPostsByBoard = replyPostsByBoard
-	m.replyFilesByBoard = replyFilesByBoard
-	m.threadAgeByBoard = threadAgeByBoard
-	m.bumpAgeByBoard = bumpAgeByBoard
-	m.oldestThreadByBoard = oldestThreadByBoard
-	m.oldestBumpByBoard = oldestBumpByBoard
+	setBoardGauges(m.catalogThreads, threads)
+	setBoardGauges(m.catalogTrackedThreads, trackedThreads)
+	setBoardGauges(m.catalogReplyPosts, replyPosts)
+	setBoardGauges(m.catalogReplyFiles, replyFiles)
+	setBoardGauges(m.catalogAverageThreadAge, threadAges)
+	setBoardGauges(m.catalogAverageBumpAge, bumpAges)
+	setBoardGauges(m.catalogOldestThreadAge, oldestThread)
+	setBoardGauges(m.catalogOldestBumpAge, oldestBump)
 }
 
-func (m *metrics) addNotifications(count int) {
-	if count == 0 {
-		return
+func setBoardGauges[V int | float64](gauges *prometheus.GaugeVec, values map[string]V) {
+	gauges.Reset()
+	for board, value := range values {
+		gauges.WithLabelValues(board).Set(float64(value))
 	}
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.notificationsSent += uint64(count)
-}
-
-func (m *metrics) render() string {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	var builder strings.Builder
-	writeGauge(&builder, "martie_up", "Whether the martie process is running.", nil, 1)
-	writeHelp(&builder, "martie_poll_total", "Completed martie poll cycles by result.", "counter")
-	writeMetric(&builder, "martie_poll_total", map[string]string{"result": "success"}, float64(m.pollSuccessTotal))
-	writeMetric(&builder, "martie_poll_total", map[string]string{"result": "error"}, float64(m.pollErrorTotal))
-	writeGauge(&builder, "martie_last_poll_success", "Whether the last martie poll cycle succeeded.", nil, boolFloat(m.lastPollSuccess))
-	writeGauge(&builder, "martie_last_poll_duration_seconds", "Duration of the last martie poll cycle.", nil, m.lastPollDuration)
-
-	writeGauge(&builder, "martie_catalog_last_successful_poll_timestamp_seconds", "Unix timestamp for the last successful catalog poll.", nil, timestampSeconds(m.lastSuccessfulPollTime))
-	writeCounter(&builder, "martie_notifications_sent_total", "Notifications sent by this martie process.", nil, float64(m.notificationsSent))
-	writeGaugeMap(&builder, "martie_catalog_threads", "Threads in the most recent catalog poll.", "board", m.threadsByBoard)
-	writeGaugeMap(&builder, "martie_catalog_tracked_threads", "Threads from the most recent catalog poll that match martie filters.", "board", m.trackedThreadsByBoard)
-	writeGaugeMap(&builder, "martie_catalog_reply_posts", "Reply posts in the most recent catalog poll.", "board", m.replyPostsByBoard)
-	writeGaugeMap(&builder, "martie_catalog_reply_files", "Reply files in the most recent catalog poll.", "board", m.replyFilesByBoard)
-	writeGaugeMap(&builder, "martie_catalog_average_thread_age_seconds", "Average age of threads in the most recent catalog poll.", "board", m.threadAgeByBoard)
-	writeGaugeMap(&builder, "martie_catalog_average_bump_age_seconds", "Average time since the last bump for threads in the most recent catalog poll.", "board", m.bumpAgeByBoard)
-	writeGaugeMap(&builder, "martie_catalog_oldest_thread_age_seconds", "Age of the oldest thread in the most recent catalog poll.", "board", m.oldestThreadByBoard)
-	writeGaugeMap(&builder, "martie_catalog_oldest_bump_age_seconds", "Time since the oldest bump in the most recent catalog poll.", "board", m.oldestBumpByBoard)
-
-	return builder.String()
-}
-
-func writeGaugeMap[V int | float64](builder *strings.Builder, name, help, label string, values map[string]V) {
-	writeHelp(builder, name, help, "gauge")
-	for _, key := range sortedKeys(values) {
-		writeMetric(builder, name, map[string]string{label: key}, float64(values[key]))
-	}
-}
-
-func writeGauge(builder *strings.Builder, name, help string, labels map[string]string, value float64) {
-	writeHelp(builder, name, help, "gauge")
-	writeMetric(builder, name, labels, value)
-}
-
-func writeCounter(builder *strings.Builder, name, help string, labels map[string]string, value float64) {
-	writeHelp(builder, name, help, "counter")
-	writeMetric(builder, name, labels, value)
-}
-
-func writeHelp(builder *strings.Builder, name, help, metricType string) {
-	fmt.Fprintf(builder, "# HELP %s %s\n", name, help)
-	fmt.Fprintf(builder, "# TYPE %s %s\n", name, metricType)
-}
-
-func writeMetric(builder *strings.Builder, name string, labels map[string]string, value float64) {
-	builder.WriteString(name)
-	if len(labels) > 0 {
-		builder.WriteByte('{')
-		keys := sortedKeys(labels)
-		for index, key := range keys {
-			if index > 0 {
-				builder.WriteByte(',')
-			}
-			fmt.Fprintf(builder, `%s="%s"`, key, escapeLabelValue(labels[key]))
-		}
-		builder.WriteByte('}')
-	}
-	builder.WriteByte(' ')
-	builder.WriteString(strconv.FormatFloat(value, 'f', -1, 64))
-	builder.WriteByte('\n')
-}
-
-func sortedKeys[V any](values map[string]V) []string {
-	keys := make([]string, 0, len(values))
-	for key := range values {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	return keys
-}
-
-func escapeLabelValue(value string) string {
-	value = strings.ReplaceAll(value, `\`, `\\`)
-	value = strings.ReplaceAll(value, "\n", `\n`)
-	return strings.ReplaceAll(value, `"`, `\"`)
-}
-
-func boolFloat(value bool) float64 {
-	if value {
-		return 1
-	}
-	return 0
-}
-
-func timestampSeconds(value time.Time) float64 {
-	if value.IsZero() {
-		return 0
-	}
-	return float64(value.Unix())
 }
