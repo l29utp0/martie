@@ -1,6 +1,7 @@
 .env
 .env.*
 !.env.example
+config/*.toml
 data/
 /martie
 /martie-*

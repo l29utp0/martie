@@ -2,9 +2,10 @@ package telegram
 
 import (
 	"fmt"
-	"html"
 	"strings"
 	"time"
+
+	"martie/internal/localization"
 )
 
 type OutgoingMessage struct {
@@ -24,43 +25,56 @@ type MiauStreamNotice struct {
 	PageURL string
 }
 
+type Formatter struct {
+	text localization.Localizer
+}
+
+func NewFormatter(text localization.Localizer) Formatter {
+	return Formatter{text: text}
+}
+
 func TextMessage(text string) OutgoingMessage {
 	return OutgoingMessage{text: text}
 }
 
-func HTMLMessage(text string) OutgoingMessage {
-	return OutgoingMessage{text: text, parseMode: "HTML"}
+func MarkdownMessage(text string) OutgoingMessage {
+	return OutgoingMessage{text: text, parseMode: "Markdown"}
 }
 
-func FormatThreadNotification(baseURL string, thread ThreadNotice, minReplyPosts int, now time.Time) OutgoingMessage {
-	var parts []string
-
-	parts = append(parts, "<b>"+html.EscapeString(fmt.Sprintf("/%s/ #%d", thread.Board, thread.PostID))+"</b>")
-	parts = append(parts, "<i>"+html.EscapeString(notificationSummary(thread, minReplyPosts, now))+"</i>")
-	parts = append(parts, fmt.Sprintf("%s/%s/thread/%d.html", strings.TrimRight(baseURL, "/"), thread.Board, thread.PostID))
-
-	return HTMLMessage(strings.Join(parts, "\n"))
-}
-
-func FormatMiauStreamNotification(stream MiauStreamNotice) OutgoingMessage {
-	return HTMLMessage(strings.Join([]string{
-		"<b>🔴 Miau stream live</b>",
-		html.EscapeString(stream.PageURL),
+func (f Formatter) ThreadNotification(baseURL string, thread ThreadNotice, minReplyPosts int, now time.Time) OutgoingMessage {
+	title := fmt.Sprintf("/%s/ #%d", thread.Board, thread.PostID)
+	summary := f.notificationSummary(thread, minReplyPosts, now)
+	url := fmt.Sprintf("%s/%s/thread/%d.html", strings.TrimRight(baseURL, "/"), thread.Board, thread.PostID)
+	return MarkdownMessage(strings.Join([]string{
+		"*" + title + "*",
+		"_" + summary + "_",
+		url,
 	}, "\n"))
 }
 
-func notificationSummary(thread ThreadNotice, minReplyPosts int, now time.Time) string {
-	parts := []string{pluralize(thread.ReplyPosts, "reply")}
+func (f Formatter) MiauStreamNotification(stream MiauStreamNotice) OutgoingMessage {
+	title := f.text.Text(localization.TelegramStreamLive, "🔴 Miau stream live")
+	return MarkdownMessage("*" + title + "*\n" + stream.PageURL)
+}
+
+func (f Formatter) notificationSummary(thread ThreadNotice, minReplyPosts int, now time.Time) string {
+	parts := []string{quantity(thread.ReplyPosts,
+		f.text.Text(localization.TelegramReplyOne, "reply"),
+		f.text.Text(localization.TelegramReplyMany, "replies"),
+	)}
 	if thread.ReplyFiles > 0 {
-		parts = append(parts, pluralize(thread.ReplyFiles, "file"))
+		parts = append(parts, quantity(thread.ReplyFiles,
+			f.text.Text(localization.TelegramFileOne, "file"),
+			f.text.Text(localization.TelegramFileMany, "files"),
+		))
 	}
-	if label := thresholdReachedLabel(thread, minReplyPosts, now); label != "" {
+	if label := f.thresholdReachedLabel(thread, minReplyPosts, now); label != "" {
 		parts = append(parts, label)
 	}
 	return strings.Join(parts, ", ")
 }
 
-func thresholdReachedLabel(thread ThreadNotice, minReplyPosts int, now time.Time) string {
+func (f Formatter) thresholdReachedLabel(thread ThreadNotice, minReplyPosts int, now time.Time) string {
 	if minReplyPosts <= 1 || thread.Date.IsZero() || thread.ReplyPosts < minReplyPosts {
 		return ""
 	}
@@ -70,17 +84,14 @@ func thresholdReachedLabel(thread ThreadNotice, minReplyPosts int, now time.Time
 		return ""
 	}
 
-	return fmt.Sprintf("hit %d in %s", minReplyPosts, humanizeElapsed(elapsed))
+	return f.text.Format(localization.TelegramThreshold, "hit %d in %s", minReplyPosts, humanizeElapsed(elapsed))
 }
 
-func pluralize(count int, noun string) string {
+func quantity(count int, singular, plural string) string {
 	if count == 1 {
-		return fmt.Sprintf("1 %s", noun)
+		return fmt.Sprintf("1 %s", singular)
 	}
-	if strings.HasSuffix(noun, "y") {
-		return fmt.Sprintf("%d %sies", count, strings.TrimSuffix(noun, "y"))
-	}
-	return fmt.Sprintf("%d %ss", count, noun)
+	return fmt.Sprintf("%d %s", count, plural)
 }
 
 func humanizeElapsed(d time.Duration) string {

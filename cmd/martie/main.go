@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
@@ -25,40 +26,48 @@ func main() {
 	if err != nil {
 		log.Fatalf("load config: %v", err)
 	}
+	logger := newLogger(cfg.Runtime.Logging)
 
 	if command == "run" {
-		if cfg.Telegram.BotToken == "" {
-			log.Fatalf("load config: TELEGRAM_BOT_TOKEN is required")
-		}
-		if cfg.Telegram.ChatID == 0 {
-			log.Fatalf("load config: TELEGRAM_CHAT_ID is required")
+		if err := cfg.ValidateRun(); err != nil {
+			logger.Error("load config", "error", err)
+			os.Exit(1)
 		}
 	}
 
 	store, err := state.Open(cfg.Storage.SQLitePath)
 	if err != nil {
-		log.Fatalf("open sqlite: %v", err)
+		logger.Error("open sqlite", "error", err)
+		os.Exit(1)
 	}
 	defer store.Close()
 
 	ptchanClient := ptchan.New(cfg.Catalog.BaseURL)
-	logger := log.New(os.Stdout, "", log.LstdFlags|log.LUTC)
-
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
 	switch command {
 	case "run":
-		if err := app.Run(ctx, cfg, store, miau.New(), ptchanClient, telegram.New(cfg.Telegram.BotToken), logger); err != nil {
-			log.Fatalf("run service: %v", err)
+		if err := app.Run(ctx, cfg, store, miau.New(), ptchanClient, telegram.New(cfg.Telegram.BotToken, logger), logger); err != nil {
+			logger.Error("run service", "error", err)
+			os.Exit(1)
 		}
 	case "snapshot":
 		if err := app.Snapshot(ctx, cfg, store, ptchanClient, logger); err != nil {
-			log.Fatalf("snapshot store: %v", err)
+			logger.Error("snapshot store", "error", err)
+			os.Exit(1)
 		}
 	default:
 		log.Fatalf("unsupported command: %s", command)
 	}
+}
+
+func newLogger(cfg app.LoggingConfig) *slog.Logger {
+	options := &slog.HandlerOptions{Level: cfg.Level}
+	if cfg.Format == app.LogJSON {
+		return slog.New(slog.NewJSONHandler(os.Stdout, options))
+	}
+	return slog.New(slog.NewTextHandler(os.Stdout, options))
 }
 
 func parseCommand(args []string) (string, error) {

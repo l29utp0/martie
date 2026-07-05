@@ -14,13 +14,14 @@ ARG TARGETARCH
 RUN arch="${TARGETARCH:-$(go env GOARCH)}" \
 	&& CGO_ENABLED=0 GOOS="$TARGETOS" GOARCH="$arch" \
 	go build -mod=readonly -trimpath -buildvcs=false -ldflags="-s -w" -o /out/martie ./cmd/martie \
-	&& mkdir -p /out/data
+	&& mkdir -p /out/data /out/etc/martie
 
 FROM scratch
 
 COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=build /out/martie /usr/local/bin/martie
 COPY --from=build --chown=65532:65532 /out/data /data
+COPY --from=build --chown=65532:65532 /out/etc /etc
 
 USER 65532:65532
 

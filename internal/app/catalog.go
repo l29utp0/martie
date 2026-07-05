@@ -8,14 +8,14 @@ import (
 	"martie/internal/telegram"
 )
 
-func (s catalogWatcher) poll(ctx context.Context) error {
+func (s catalogPoller) poll(ctx context.Context) error {
 	if err := s.sync(ctx); err != nil {
 		return err
 	}
 	return s.prune(ctx)
 }
 
-func (s catalogWatcher) sync(ctx context.Context) error {
+func (s catalogPoller) sync(ctx context.Context) error {
 	catalog, err := s.client.FetchCatalog(ctx)
 	if err != nil {
 		return fmt.Errorf("fetch catalog: %w", err)
@@ -51,28 +51,26 @@ func (s catalogWatcher) sync(ctx context.Context) error {
 			continue
 		}
 
-		message := telegram.FormatThreadNotification(s.cfg.BaseURL, telegram.ThreadNotice{
+		message := s.format.ThreadNotification(s.cfg.BaseURL, telegram.ThreadNotice{
 			Board:      thread.Board,
 			PostID:     thread.PostID,
 			Date:       thread.Date,
 			ReplyPosts: thread.ReplyPosts,
 			ReplyFiles: thread.ReplyFiles,
 		}, s.cfg.MinReplyPosts, now)
-		if err := s.telegram.Send(ctx, s.chatID, message); err != nil {
-			// TODO: Telegram may return retry_after, but this loop currently retries on
-			// the next poll, so a short PollInterval may retry sooner than requested.
+		if err := s.telegram.Send(ctx, telegram.SendRequest{ChatID: s.chatID, Message: message}); err != nil {
 			return fmt.Errorf("send telegram message for %s: %w", thread.ID, err)
 		}
 
 		record.NotifiedNewAt = &now
 		if err := s.store.UpsertThread(ctx, record); err != nil {
-			s.logger.Printf("warning: thread %s was sent but could not be marked notified: %v", thread.ID, err)
+			s.logger.Warn("notification sent but thread could not be marked notified", "thread", thread.ID, "error", err)
 		}
 
 		newThreads++
 	}
 
-	s.metrics.addNotifications("catalog", newThreads)
-	s.logger.Printf("catalog sync complete: %d threads seen, %d new notifications", len(catalog.Threads), newThreads)
+	s.metrics.addNotifications(string(componentCatalog), newThreads)
+	s.logger.Debug("catalog sync complete", "threads", len(catalog.Threads), "notifications", newThreads)
 	return nil
 }

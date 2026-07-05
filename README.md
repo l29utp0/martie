@@ -1,134 +1,111 @@
 # martie
 
-`martie` watches the `ptchan` overboard catalog and forwards newly seen threads to a Telegram chat.
-It also checks a small set of `miau` stream URLs and notifies when a stream comes online.
+Martie is a small Telegram bot for the ptchan community. It can run three independent components:
 
-It stays intentionally small:
+- `catalog` watches the ptchan catalog and announces new threads.
+- `streams` watches configured stream URLs and announces when they go live.
+- `assistant` answers messages addressed to the bot in a Telegram discussion group using DeepSeek.
 
-- polls `https://ptchan.org/catalog.json`
-- tracks seen threads in SQLite
-- sends Telegram messages for new matches
-- sends Telegram messages when its default `miau` streams go live
-- optionally exposes Prometheus metrics
-- stores only the state it needs
+Martie uses long polling, stores its small amount of durable state in SQLite, and can expose Prometheus metrics. It has no webhook or public API beyond the optional metrics endpoint.
 
-- no webhook
-- no inbound API beyond optional `/metrics`
-- no Telegram commands
-- no full-thread fetches
+## Run locally
 
-## Config
-
-Copy `.env.example` to `.env.dev` and `.env.prod`, then fill in the settings you need.
-Configuration is grouped by concern:
-
-- Telegram:
-  - `TELEGRAM_BOT_TOKEN`
-  - `TELEGRAM_CHAT_ID`
-- Catalog:
-  - `PTCHAN_BASE_URL`
-  - `MIN_REPLY_POSTS`
-  - `BOARD_DENYLIST`
-  - `KEYWORD_DENYLIST`
-  - `MAX_THREAD_AGE_HOURS`
-  - `PRUNE_AFTER_HOURS`
-- Runtime:
-  - `POLL_INTERVAL_SECONDS`
-  - `METRICS_ADDR`
-- Storage:
-  - `SQLITE_PATH`
-
-The required settings for `run` are:
-
-- `TELEGRAM_BOT_TOKEN`
-- `TELEGRAM_CHAT_ID`
-
-Make targets default to `BOT_ENV=dev`. Use `BOT_ENV=prod` for `.env.prod`.
-
-If `SQLITE_PATH` is blank, local runs use `data/dev.db` or `data/prod.db`.
-
-Set `METRICS_ADDR` to enable a Prometheus scrape endpoint at `/metrics`, for example `:9090`.
-Workflow health is labeled by `workflow` (`catalog` or `streams`), notification counts use the same values in `source`, and catalog gauges are labeled by `board`.
-The principal metric families are:
-
-- `martie_workflow_runs_total`
-- `martie_workflow_duration_seconds`
-- `martie_workflow_last_success`
-- `martie_workflow_last_successful_timestamp_seconds`
-- `martie_notifications_sent_total`
-- `martie_ptchan_catalog_*`
-
-## Local Run
+Requirements: Go 1.25 or newer, a Telegram bot token, and a DeepSeek API key when running the assistant.
 
 ```bash
 cp .env.example .env.dev
-make tidy
+mkdir -p config
+cp config.example.toml config/dev.toml
+```
+
+Edit both files, then run:
+
+```bash
 make run
 ```
 
-To use the production config locally:
+Configuration is split deliberately:
+
+- `.env.dev` contains secrets.
+- `config/dev.toml` contains application settings.
+- `runtime.components` selects `catalog`, `streams`, `assistant`, or any combination.
+
+The example TOML documents every setting. Unknown keys and invalid values fail at startup. `BOT_ENV=prod` selects `.env.prod`, `config/prod.toml`, and `data/prod.db`.
+
+## First catalog run
+
+The catalog component announces every eligible thread it has not seen before. To establish the current catalog as the baseline without sending notifications, run this once before starting Martie:
 
 ```bash
-make run BOT_ENV=prod
+make snapshot BOT_ENV=prod
 ```
 
-To snapshot the current catalog and exit without sending notifications:
+The snapshot command only needs catalog and storage configuration; it does not require the runtime component list or Telegram and DeepSeek secrets.
+
+## Deploy with Docker
+
+Create `.env.prod` and `config/prod.toml`, then deploy:
 
 ```bash
-make snapshot
-```
-
-## Build
-
-Local builds require Go 1.25 or newer.
-`make build` uses Go's `-trimpath` and `-buildvcs=false` flags so release binaries do not embed your local filesystem path or repo state.
-
-## Docker
-
-First run:
-
-```bash
-make docker-build
-make docker-run BOT_ENV=prod
-```
-
-Update an existing server:
-
-```bash
-git pull
 make docker-deploy BOT_ENV=prod
 ```
 
-Other useful commands:
+Useful operational commands:
 
 ```bash
-make docker-snapshot BOT_ENV=prod
 make docker-logs BOT_ENV=prod
+make docker-snapshot BOT_ENV=prod
 make docker-clean
 ```
 
-Docker uses the same `BOT_ENV` selection as local runs. SQLite always lives at `/data/bot.db` in the container, backed by a named Docker volume such as `martie-prod-data`, so state survives redeploys.
+The container runs as a non-root user with a read-only filesystem. The selected TOML file is mounted read-only, secrets are passed through the environment, and SQLite is stored in the persistent `martie-prod-data` volume.
 
-To publish the metrics endpoint from Docker, set `METRICS_ADDR=:9090` and pass a port mapping:
+Docker logging defaults to the rotating `local` driver, capped at five 10 MB files per container. This is safe without host setup, but removing a container removes its history. On a systemd server, use journald to retain logs across deployments:
 
 ```bash
-make docker-run BOT_ENV=prod DOCKER_RUN_EXTRA='-p 127.0.0.1:9090:9090'
+make docker-deploy BOT_ENV=prod DOCKER_LOG_DRIVER=journald
+make docker-logs BOT_ENV=prod DOCKER_LOG_DRIVER=journald
 ```
 
-The image is a static `scratch` runtime with CA certificates, a non-root user, no default exposed ports, and SQLite state under `/data`. Secrets stay in the runtime environment.
+Ensure the host journal is persistent and bounded with `/etc/systemd/journald.conf.d/martie.conf`:
 
-## Behavior
+```ini
+[Journal]
+Storage=persistent
+SystemMaxUse=500M
+MaxRetentionSec=30day
+```
 
-- The bot only notifies for newly discovered threads.
-- On first run it will notify for everything currently in the catalog unless you run `make snapshot` first.
-- `MIN_REPLY_POSTS` can delay a notification until a thread reaches the reply threshold.
-- `make snapshot` stores the current catalog and marks only threads that already meet `MIN_REPLY_POSTS` as handled.
-- `BOARD_DENYLIST`, `KEYWORD_DENYLIST`, `MAX_THREAD_AGE_HOURS`, and `PRUNE_AFTER_HOURS` filter what is tracked and how long it stays in SQLite.
-- New threads are stored before send; if Telegram accepts a message but the follow-up SQLite write fails, that notification may be retried on the next poll.
-- Ptchan and miau polling run independently; a failure in one does not stop the other.
-- The default miau channels are `oficial` and `l29utp0`.
-- Miau stream checks treat a live URL as active until it returns `404` for 2 consecutive poll cycles.
+Apply the host configuration with `sudo systemctl restart systemd-journald`. In journald mode, `make docker-logs` runs `journalctl`; the current user therefore needs journal access. If it is denied, use `sudo journalctl -t martie-prod -f` or grant the user the host's journal-reader group. Historical logs can be queried with `journalctl -t martie-prod --since yesterday`. Hosts without journald should keep the default `local` driver.
+
+To scrape Martie from Prometheus in another container, set `runtime.metrics_addr = ":9090"` and attach both containers to the same user-defined Docker network:
+
+```bash
+docker network create monitoring # once, unless the network already exists
+make docker-deploy BOT_ENV=prod DOCKER_NETWORK=monitoring
+```
+
+Prometheus can then scrape `martie-prod:9090` without publishing the port on the host. `DOCKER_NETWORK` must name an existing network. For a host-based or external Prometheus, publish the port explicitly with `DOCKER_RUN_EXTRA`; metrics are available at `/metrics`.
+
+## Telegram setup notes
+
+The notification chat receives catalog and stream announcements. The discussion chat is where the assistant listens for mentions and replies.
+
+To receive ordinary group mentions, make the bot a group administrator or disable Group Privacy in BotFather. If you do not know the discussion chat ID, run Martie, mention it in the group, and inspect the debug log for the observed chat ID.
+
+Access to the assistant is fail-closed by default. Configure `telegram.allowed_user_ids`, or set `telegram.allow_all_users = true` intentionally.
+
+When the assistant is enabled, addressed message text and recent conversation context are sent to the configured DeepSeek API. Telegram identities are replaced with temporary aliases, but message content is not anonymized.
+
+## Development
+
+```bash
+make check   # format, vet, and test
+make build
+```
+
+See `make help` for the complete command list.
 
 ## License
 
-This project is licensed under the GNU General Public License, version 3 or any later version. See `LICENSE`.
+GNU General Public License, version 3 or later. See `LICENSE`.

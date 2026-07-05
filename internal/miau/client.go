@@ -17,21 +17,6 @@ type Channel struct {
 	PageURL  string
 }
 
-func DefaultChannels() []Channel {
-	return []Channel{
-		{
-			Key:      "oficial",
-			ProbeURL: "https://stream-global.bfcdn.host/app/031304855496+miau/llhls.m3u8",
-			PageURL:  "https://miau.gg/oficial",
-		},
-		{
-			Key:      "l29utp0",
-			ProbeURL: "https://stream-global.bfcdn.host/app/031304855496+l29utp0/llhls.m3u8",
-			PageURL:  "https://miau.gg/l29utp0",
-		},
-	}
-}
-
 func New() *Client {
 	return &Client{
 		http: &http.Client{
