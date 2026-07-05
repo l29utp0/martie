@@ -3,23 +3,23 @@ package app
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"time"
 
 	"martie/internal/ptchan"
 	"martie/internal/state"
 )
 
-func Snapshot(ctx context.Context, cfg Config, store *state.Store, client *ptchan.Client, logger *log.Logger) error {
-	return catalogWatcher{
+func Snapshot(ctx context.Context, cfg Config, store *state.Store, client *ptchan.Client, logger *slog.Logger) error {
+	return catalogPoller{
 		cfg:    cfg.Catalog,
 		store:  store,
 		client: client,
-		logger: logger,
+		logger: logger.With("component", componentCatalog),
 	}.snapshot(ctx)
 }
 
-func (s catalogWatcher) snapshot(ctx context.Context) error {
+func (s catalogPoller) snapshot(ctx context.Context) error {
 	catalog, err := s.client.FetchCatalog(ctx)
 	if err != nil {
 		return fmt.Errorf("fetch catalog for snapshot: %w", err)
@@ -53,11 +53,11 @@ func (s catalogWatcher) snapshot(ctx context.Context) error {
 		stored++
 	}
 
-	s.logger.Printf("snapshot complete: %d threads stored, %d marked already handled", stored, handled)
+	s.logger.Info("snapshot complete", "stored", stored, "handled", handled)
 	return nil
 }
 
-func (s catalogWatcher) prune(ctx context.Context) error {
+func (s catalogPoller) prune(ctx context.Context) error {
 	if s.cfg.PruneAfter == 0 {
 		return nil
 	}
@@ -68,7 +68,7 @@ func (s catalogWatcher) prune(ctx context.Context) error {
 		return err
 	}
 	if pruned > 0 {
-		s.logger.Printf("pruned %d threads last seen before %s", pruned, cutoff.Format(time.RFC3339))
+		s.logger.Info("threads pruned", "count", pruned, "cutoff", cutoff.Format(time.RFC3339))
 	}
 
 	return nil

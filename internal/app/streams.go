@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"martie/internal/miau"
@@ -9,36 +10,34 @@ import (
 	"martie/internal/telegram"
 )
 
-const streamEndMissThreshold = 2
-
-func (s streamWatcher) poll(ctx context.Context) error {
+func (s streamPoller) poll(ctx context.Context) error {
+	var errs []error
 	for _, channel := range s.channels {
-		live, err := s.client.IsLive(ctx, channel)
-		if err != nil {
-			return fmt.Errorf("check miau stream %s: %w", channel.Key, err)
-		}
-
-		stream, _, err := s.store.GetStreamState(ctx, miauStateKey(channel.Key))
-		if err != nil {
-			return fmt.Errorf("load miau stream %s: %w", channel.Key, err)
-		}
-
-		if live {
-			if err := s.handleStartedStream(ctx, channel, stream); err != nil {
-				return err
-			}
-			continue
-		}
-
-		if err := s.handleStoppedStream(ctx, channel, stream); err != nil {
-			return err
+		if err := s.pollChannel(ctx, channel); err != nil {
+			errs = append(errs, err)
 		}
 	}
-
-	return nil
+	return errors.Join(errs...)
 }
 
-func (s streamWatcher) handleStartedStream(ctx context.Context, channel miau.Channel, stream state.StreamState) error {
+func (s streamPoller) pollChannel(ctx context.Context, channel miau.Channel) error {
+	live, err := s.client.IsLive(ctx, channel)
+	if err != nil {
+		return fmt.Errorf("check miau stream %s: %w", channel.Key, err)
+	}
+
+	stream, _, err := s.store.GetStreamState(ctx, miauStateKey(channel.Key))
+	if err != nil {
+		return fmt.Errorf("load miau stream %s: %w", channel.Key, err)
+	}
+
+	if live {
+		return s.handleStartedStream(ctx, channel, stream)
+	}
+	return s.handleStoppedStream(ctx, channel, stream)
+}
+
+func (s streamPoller) handleStartedStream(ctx context.Context, channel miau.Channel, stream state.StreamState) error {
 	wasActive := stream.Active
 	previousMisses := stream.Consecutive404s
 	stream.Key = miauStateKey(channel.Key)
@@ -57,39 +56,39 @@ func (s streamWatcher) handleStartedStream(ctx context.Context, channel miau.Cha
 		return err
 	}
 
-	message := telegram.FormatMiauStreamNotification(telegram.MiauStreamNotice{PageURL: channel.PageURL})
-	if err := s.telegram.Send(ctx, s.chatID, message); err != nil {
+	message := s.format.MiauStreamNotification(telegram.MiauStreamNotice{PageURL: channel.PageURL})
+	if err := s.telegram.Send(ctx, telegram.SendRequest{ChatID: s.chatID, Message: message}); err != nil {
 		return fmt.Errorf("send miau telegram message for %s: %w", channel.Key, err)
 	}
-	s.logger.Printf("miau stream %s live notification sent", channel.Key)
-	s.metrics.addNotifications("streams", 1)
+	s.logger.Info("stream live notification sent", "stream", channel.Key)
+	s.metrics.addNotifications(string(componentStreams), 1)
 
 	stream.LiveNotified = true
 	if err := s.store.UpsertStreamState(ctx, stream); err != nil {
-		s.logger.Printf("warning: miau stream %s was sent but could not be marked notified: %v", channel.Key, err)
+		s.logger.Warn("notification sent but stream could not be marked notified", "stream", channel.Key, "error", err)
 	}
 
 	return nil
 }
 
-func (s streamWatcher) handleStoppedStream(ctx context.Context, channel miau.Channel, stream state.StreamState) error {
+func (s streamPoller) handleStoppedStream(ctx context.Context, channel miau.Channel, stream state.StreamState) error {
 	if !stream.Active {
 		return nil
 	}
 
 	stream.Consecutive404s++
-	if stream.Consecutive404s < streamEndMissThreshold {
+	if stream.Consecutive404s < s.endMissThreshold {
 		return s.storeStreamState(ctx, channel.Key, stream)
 	}
 
 	stream.Active = false
 	stream.LiveNotified = false
 	stream.Consecutive404s = 0
-	s.logger.Printf("miau stream %s marked offline after %d misses", channel.Key, streamEndMissThreshold)
+	s.logger.Info("stream marked offline", "stream", channel.Key, "misses", s.endMissThreshold)
 	return s.storeStreamState(ctx, channel.Key, stream)
 }
 
-func (s streamWatcher) storeStreamState(ctx context.Context, channelKey string, stream state.StreamState) error {
+func (s streamPoller) storeStreamState(ctx context.Context, channelKey string, stream state.StreamState) error {
 	if err := s.store.UpsertStreamState(ctx, stream); err != nil {
 		return fmt.Errorf("store miau stream %s: %w", channelKey, err)
 	}

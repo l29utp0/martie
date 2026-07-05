@@ -1,119 +1,438 @@
 package app
 
 import (
+	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
+	"github.com/pelletier/go-toml/v2"
+
+	"martie/internal/localization"
+	"martie/internal/miau"
 	"martie/internal/ptchan"
 )
 
 type Config struct {
-	Telegram TelegramConfig
-	Catalog  CatalogConfig
-	Runtime  RuntimeConfig
-	Storage  StorageConfig
+	Locale    localization.Locale
+	Telegram  TelegramConfig
+	Assistant AssistantConfig
+	DeepSeek  DeepSeekConfig
+	Catalog   CatalogConfig
+	Streams   StreamsConfig
+	Runtime   RuntimeConfig
+	Storage   StorageConfig
 }
 
 type TelegramConfig struct {
-	BotToken string
-	ChatID   int64
+	BotToken           string
+	NotificationChatID int64
+}
+
+type AssistantConfig struct {
+	Name               string
+	DiscussionChatID   int64
+	AllowAllUsers      bool
+	AllowedUserIDs     []int64
+	RateLimitWindow    time.Duration
+	UserRequestLimit   int
+	UserRequestBurst   int
+	GlobalRequestLimit int
+	GlobalRequestBurst int
+	SystemPrompt       string
+	ChatPrompt         string
+	MaxInputRunes      int
+	LogMemory          bool
+	ConversationTTL    time.Duration
+	HistoryExchanges   int
+}
+
+type DeepSeekConfig struct {
+	APIKey    string
+	Model     string
+	MaxTokens int
+	Timeout   time.Duration
 }
 
 type CatalogConfig struct {
 	BaseURL       string
+	PollInterval  time.Duration
 	MinReplyPosts int
 	Filter        ptchan.Filter
 	PruneAfter    time.Duration
 }
 
-type RuntimeConfig struct {
-	MetricsAddr  string
-	PollInterval time.Duration
+type StreamsConfig struct {
+	Channels         []miau.Channel
+	PollInterval     time.Duration
+	EndMissThreshold int
 }
+
+type RuntimeConfig struct {
+	Components  []ComponentName
+	MetricsAddr string
+	Logging     LoggingConfig
+}
+
+type ComponentName string
+
+const (
+	componentAssistant ComponentName = "assistant"
+	componentCatalog   ComponentName = "catalog"
+	componentStreams   ComponentName = "streams"
+)
+
+type LoggingConfig struct {
+	Level  slog.Level
+	Format LogFormat
+}
+
+type LogFormat string
+
+const (
+	LogText LogFormat = "text"
+	LogJSON LogFormat = "json"
+)
 
 type StorageConfig struct {
 	SQLitePath string
 }
 
+type fileConfig struct {
+	Locale    string              `toml:"locale"`
+	Name      string              `toml:"name"`
+	Telegram  fileTelegramConfig  `toml:"telegram"`
+	Assistant fileAssistantConfig `toml:"assistant"`
+	DeepSeek  fileDeepSeekConfig  `toml:"deepseek"`
+	Catalog   fileCatalogConfig   `toml:"catalog"`
+	Streams   fileStreamsConfig   `toml:"streams"`
+	Runtime   fileRuntimeConfig   `toml:"runtime"`
+}
+
+type fileTelegramConfig struct {
+	NotificationChatID int64   `toml:"notification_chat_id"`
+	DiscussionChatID   int64   `toml:"discussion_chat_id"`
+	AllowedUserIDs     []int64 `toml:"allowed_user_ids"`
+	AllowAllUsers      bool    `toml:"allow_all_users"`
+}
+
+type fileAssistantConfig struct {
+	MaxInputRunes int                 `toml:"max_input_runes"`
+	LogMemory     bool                `toml:"log_memory"`
+	SystemPrompt  string              `toml:"system_prompt"`
+	ChatPrompt    string              `toml:"chat_prompt"`
+	RateLimit     fileRateLimitConfig `toml:"rate_limit"`
+	Memory        fileMemoryConfig    `toml:"memory"`
+}
+
+type fileMemoryConfig struct {
+	TTL              string `toml:"ttl"`
+	HistoryExchanges int    `toml:"history_exchanges"`
+}
+
+type fileRateLimitConfig struct {
+	Window      string `toml:"window"`
+	UserLimit   int    `toml:"user_limit"`
+	UserBurst   int    `toml:"user_burst"`
+	GlobalLimit int    `toml:"global_limit"`
+	GlobalBurst int    `toml:"global_burst"`
+}
+
+type fileDeepSeekConfig struct {
+	Model     string `toml:"model"`
+	MaxTokens int    `toml:"max_tokens"`
+	Timeout   string `toml:"timeout"`
+}
+
+type fileCatalogConfig struct {
+	BaseURL         string   `toml:"base_url"`
+	PollInterval    string   `toml:"poll_interval"`
+	MinReplyPosts   int      `toml:"min_reply_posts"`
+	BoardDenylist   []string `toml:"board_denylist"`
+	KeywordDenylist []string `toml:"keyword_denylist"`
+	MaxThreadAge    string   `toml:"max_thread_age"`
+	PruneAfter      string   `toml:"prune_after"`
+}
+
+type fileRuntimeConfig struct {
+	Components  []string          `toml:"components"`
+	MetricsAddr string            `toml:"metrics_addr"`
+	Logging     fileLoggingConfig `toml:"logging"`
+}
+
+type fileLoggingConfig struct {
+	Level  string `toml:"level"`
+	Format string `toml:"format"`
+}
+
+type fileStreamsConfig struct {
+	EndMissThreshold int                `toml:"end_miss_threshold"`
+	PollInterval     string             `toml:"poll_interval"`
+	Channels         []fileStreamConfig `toml:"channel"`
+}
+
+type fileStreamConfig struct {
+	Key      string `toml:"key"`
+	ProbeURL string `toml:"probe_url"`
+	PageURL  string `toml:"page_url"`
+}
+
 func LoadConfig() (Config, error) {
-	cfg := Config{
-		Catalog: CatalogConfig{
-			BaseURL: envOr("PTCHAN_BASE_URL", "https://ptchan.org"),
-		},
-		Storage: StorageConfig{
-			SQLitePath: envOr("SQLITE_PATH", "data/bot.db"),
-		},
+	path := strings.TrimSpace(os.Getenv("CONFIG_FILE"))
+	if path == "" {
+		return Config{}, fmt.Errorf("CONFIG_FILE is required")
 	}
 
-	cfg.Telegram.BotToken = strings.TrimSpace(os.Getenv("TELEGRAM_BOT_TOKEN"))
-	cfg.Runtime.MetricsAddr = strings.TrimSpace(os.Getenv("METRICS_ADDR"))
+	file, err := os.Open(path)
+	if err != nil {
+		return Config{}, fmt.Errorf("open config %q: %w", path, err)
+	}
+	defer file.Close()
 
-	if raw := strings.TrimSpace(os.Getenv("TELEGRAM_CHAT_ID")); raw != "" {
-		chatID, err := strconv.ParseInt(raw, 10, 64)
-		if err != nil {
-			return Config{}, fmt.Errorf("parse TELEGRAM_CHAT_ID: %w", err)
+	raw := fileConfig{
+		Locale: string(localization.English),
+		Assistant: fileAssistantConfig{
+			MaxInputRunes: 4096,
+			Memory: fileMemoryConfig{
+				TTL:              "10m",
+				HistoryExchanges: 8,
+			},
+			RateLimit: fileRateLimitConfig{
+				Window:      "60m",
+				UserLimit:   25,
+				UserBurst:   6,
+				GlobalLimit: 100,
+				GlobalBurst: 12,
+			},
+		},
+		DeepSeek: fileDeepSeekConfig{
+			Model:     "deepseek-v4-flash",
+			MaxTokens: 500,
+			Timeout:   "60s",
+		},
+		Catalog: fileCatalogConfig{
+			BaseURL:      "https://ptchan.org",
+			PollInterval: "60s",
+			MaxThreadAge: "0s",
+			PruneAfter:   "720h",
+		},
+		Runtime: fileRuntimeConfig{
+			Logging: fileLoggingConfig{
+				Level:  "info",
+				Format: string(LogText),
+			},
+		},
+		Streams: fileStreamsConfig{EndMissThreshold: 2, PollInterval: "60s"},
+	}
+	decoder := toml.NewDecoder(file)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&raw); err != nil {
+		var strictError *toml.StrictMissingError
+		if errors.As(err, &strictError) {
+			return Config{}, fmt.Errorf("decode config %q:\n%s", path, strictError.String())
 		}
-		cfg.Telegram.ChatID = chatID
+		return Config{}, fmt.Errorf("decode config %q: %w", path, err)
 	}
 
-	pollSeconds, err := strconv.Atoi(envOr("POLL_INTERVAL_SECONDS", "60"))
-	if err != nil || pollSeconds <= 0 {
-		return Config{}, fmt.Errorf("POLL_INTERVAL_SECONDS must be a positive integer")
+	locale, err := localization.Parse(strings.TrimSpace(raw.Locale))
+	if err != nil {
+		return Config{}, err
 	}
-	cfg.Runtime.PollInterval = time.Duration(pollSeconds) * time.Second
-
-	minReplyPosts, err := strconv.Atoi(envOr("MIN_REPLY_POSTS", "0"))
-	if err != nil || minReplyPosts < 0 {
-		return Config{}, fmt.Errorf("MIN_REPLY_POSTS must be a non-negative integer")
+	cfg := Config{
+		Locale: locale,
+		Telegram: TelegramConfig{
+			BotToken:           strings.TrimSpace(os.Getenv("TELEGRAM_BOT_TOKEN")),
+			NotificationChatID: raw.Telegram.NotificationChatID,
+		},
+		Assistant: AssistantConfig{
+			Name:               strings.TrimSpace(raw.Name),
+			DiscussionChatID:   raw.Telegram.DiscussionChatID,
+			AllowAllUsers:      raw.Telegram.AllowAllUsers,
+			AllowedUserIDs:     raw.Telegram.AllowedUserIDs,
+			UserRequestLimit:   raw.Assistant.RateLimit.UserLimit,
+			UserRequestBurst:   raw.Assistant.RateLimit.UserBurst,
+			GlobalRequestLimit: raw.Assistant.RateLimit.GlobalLimit,
+			GlobalRequestBurst: raw.Assistant.RateLimit.GlobalBurst,
+			MaxInputRunes:      raw.Assistant.MaxInputRunes,
+			LogMemory:          raw.Assistant.LogMemory,
+			HistoryExchanges:   raw.Assistant.Memory.HistoryExchanges,
+		},
+		DeepSeek: DeepSeekConfig{
+			APIKey:    strings.TrimSpace(os.Getenv("DEEPSEEK_API_KEY")),
+			Model:     strings.TrimSpace(raw.DeepSeek.Model),
+			MaxTokens: raw.DeepSeek.MaxTokens,
+		},
+		Catalog: CatalogConfig{
+			BaseURL:       strings.TrimRight(strings.TrimSpace(raw.Catalog.BaseURL), "/"),
+			MinReplyPosts: raw.Catalog.MinReplyPosts,
+			Filter: ptchan.Filter{
+				BoardDenylist:   raw.Catalog.BoardDenylist,
+				KeywordDenylist: raw.Catalog.KeywordDenylist,
+			},
+		},
+		Streams: StreamsConfig{EndMissThreshold: raw.Streams.EndMissThreshold},
+		Runtime: RuntimeConfig{MetricsAddr: strings.TrimSpace(raw.Runtime.MetricsAddr)},
+		Storage: StorageConfig{SQLitePath: filepath.Clean(envOr("SQLITE_PATH", "data/bot.db"))},
 	}
-	cfg.Catalog.MinReplyPosts = minReplyPosts
 
-	cfg.Catalog.Filter.BoardDenylist = splitCommaList(os.Getenv("BOARD_DENYLIST"))
-	cfg.Catalog.Filter.KeywordDenylist = splitCommaList(os.Getenv("KEYWORD_DENYLIST"))
-
-	maxThreadAgeHours, err := strconv.Atoi(envOr("MAX_THREAD_AGE_HOURS", "0"))
-	if err != nil || maxThreadAgeHours < 0 {
-		return Config{}, fmt.Errorf("MAX_THREAD_AGE_HOURS must be a non-negative integer")
+	cfg.Assistant.SystemPrompt = strings.ReplaceAll(strings.TrimSpace(raw.Assistant.SystemPrompt), "{{name}}", cfg.Assistant.Name)
+	cfg.Assistant.ChatPrompt = strings.ReplaceAll(strings.TrimSpace(raw.Assistant.ChatPrompt), "{{name}}", cfg.Assistant.Name)
+	if cfg.Assistant.MaxInputRunes <= 0 {
+		return Config{}, fmt.Errorf("assistant.max_input_runes must be positive")
 	}
-	cfg.Catalog.Filter.MaxThreadAge = time.Duration(maxThreadAgeHours) * time.Hour
-
-	pruneAfterHours, err := strconv.Atoi(envOr("PRUNE_AFTER_HOURS", "720"))
-	if err != nil || pruneAfterHours < 0 {
-		return Config{}, fmt.Errorf("PRUNE_AFTER_HOURS must be a non-negative integer")
+	if cfg.Assistant.HistoryExchanges <= 0 {
+		return Config{}, fmt.Errorf("assistant.memory.history_exchanges must be positive")
 	}
-	cfg.Catalog.PruneAfter = time.Duration(pruneAfterHours) * time.Hour
+	if cfg.Assistant.UserRequestLimit <= 0 || cfg.Assistant.UserRequestBurst <= 0 || cfg.Assistant.UserRequestBurst > cfg.Assistant.UserRequestLimit {
+		return Config{}, fmt.Errorf("assistant.rate_limit.user_burst must be positive and no greater than user_limit")
+	}
+	if cfg.Assistant.GlobalRequestLimit <= 0 || cfg.Assistant.GlobalRequestBurst <= 0 || cfg.Assistant.GlobalRequestBurst > cfg.Assistant.GlobalRequestLimit {
+		return Config{}, fmt.Errorf("assistant.rate_limit.global_burst must be positive and no greater than global_limit")
+	}
+	if cfg.DeepSeek.Model == "" {
+		return Config{}, fmt.Errorf("deepseek.model is required")
+	}
+	if cfg.DeepSeek.MaxTokens <= 0 {
+		return Config{}, fmt.Errorf("deepseek.max_tokens must be positive")
+	}
+	if cfg.Catalog.BaseURL == "" {
+		return Config{}, fmt.Errorf("catalog.base_url is required")
+	}
+	if cfg.Catalog.MinReplyPosts < 0 {
+		return Config{}, fmt.Errorf("catalog.min_reply_posts must be non-negative")
+	}
+	if cfg.Streams.EndMissThreshold <= 0 {
+		return Config{}, fmt.Errorf("streams.end_miss_threshold must be positive")
+	}
+	if err := cfg.Runtime.Logging.Level.UnmarshalText([]byte(strings.TrimSpace(raw.Runtime.Logging.Level))); err != nil {
+		return Config{}, fmt.Errorf("runtime.logging.level must be debug, info, warn, or error")
+	}
+	cfg.Runtime.Logging.Format = LogFormat(strings.TrimSpace(raw.Runtime.Logging.Format))
+	if cfg.Runtime.Logging.Format != LogText && cfg.Runtime.Logging.Format != LogJSON {
+		return Config{}, fmt.Errorf("runtime.logging.format must be %q or %q", LogText, LogJSON)
+	}
+	seenComponents := make(map[ComponentName]struct{}, len(raw.Runtime.Components))
+	for _, value := range raw.Runtime.Components {
+		component := ComponentName(strings.TrimSpace(value))
+		switch component {
+		case componentCatalog, componentStreams, componentAssistant:
+		default:
+			return Config{}, fmt.Errorf("runtime.components contains unknown component %q", value)
+		}
+		if _, exists := seenComponents[component]; exists {
+			return Config{}, fmt.Errorf("runtime.components contains duplicate component %q", component)
+		}
+		seenComponents[component] = struct{}{}
+		cfg.Runtime.Components = append(cfg.Runtime.Components, component)
+	}
+	streamKeys := make(map[string]struct{}, len(raw.Streams.Channels))
+	for i, stream := range raw.Streams.Channels {
+		stream.Key = strings.TrimSpace(stream.Key)
+		stream.ProbeURL = strings.TrimSpace(stream.ProbeURL)
+		stream.PageURL = strings.TrimSpace(stream.PageURL)
+		if stream.Key == "" || stream.ProbeURL == "" || stream.PageURL == "" {
+			return Config{}, fmt.Errorf("streams.channel[%d] requires key, probe_url, and page_url", i)
+		}
+		if _, exists := streamKeys[stream.Key]; exists {
+			return Config{}, fmt.Errorf("streams.channel key %q is duplicated", stream.Key)
+		}
+		streamKeys[stream.Key] = struct{}{}
+		cfg.Streams.Channels = append(cfg.Streams.Channels, miau.Channel(stream))
+	}
 
-	cfg.Storage.SQLitePath = filepath.Clean(cfg.Storage.SQLitePath)
-	cfg.Catalog.BaseURL = strings.TrimRight(cfg.Catalog.BaseURL, "/")
+	if cfg.Assistant.ConversationTTL, err = positiveDuration("assistant.memory.ttl", raw.Assistant.Memory.TTL); err != nil {
+		return Config{}, err
+	}
+	if cfg.Assistant.RateLimitWindow, err = positiveDuration("assistant.rate_limit.window", raw.Assistant.RateLimit.Window); err != nil {
+		return Config{}, err
+	}
+	if cfg.DeepSeek.Timeout, err = positiveDuration("deepseek.timeout", raw.DeepSeek.Timeout); err != nil {
+		return Config{}, err
+	}
+	if cfg.Catalog.PollInterval, err = positiveDuration("catalog.poll_interval", raw.Catalog.PollInterval); err != nil {
+		return Config{}, err
+	}
+	if cfg.Streams.PollInterval, err = positiveDuration("streams.poll_interval", raw.Streams.PollInterval); err != nil {
+		return Config{}, err
+	}
+	if cfg.Catalog.Filter.MaxThreadAge, err = nonNegativeDuration("catalog.max_thread_age", raw.Catalog.MaxThreadAge); err != nil {
+		return Config{}, err
+	}
+	if cfg.Catalog.PruneAfter, err = nonNegativeDuration("catalog.prune_after", raw.Catalog.PruneAfter); err != nil {
+		return Config{}, err
+	}
 
 	return cfg, nil
 }
 
+func (c Config) runs(component ComponentName) bool {
+	for _, configured := range c.Runtime.Components {
+		if configured == component {
+			return true
+		}
+	}
+	return false
+}
+
+func (c Config) ValidateRun() error {
+	if len(c.Runtime.Components) == 0 {
+		return fmt.Errorf("runtime.components must contain at least one component")
+	}
+	if c.Telegram.BotToken == "" {
+		return fmt.Errorf("TELEGRAM_BOT_TOKEN is required")
+	}
+	if (c.runs(componentCatalog) || c.runs(componentStreams)) && c.Telegram.NotificationChatID == 0 {
+		return fmt.Errorf("telegram.notification_chat_id is required for catalog and streams")
+	}
+	if c.runs(componentStreams) && len(c.Streams.Channels) == 0 {
+		return fmt.Errorf("streams requires at least one channel")
+	}
+	if !c.runs(componentAssistant) {
+		return nil
+	}
+	if c.Assistant.Name == "" {
+		return fmt.Errorf("name is required for assistant")
+	}
+	if c.Assistant.SystemPrompt == "" {
+		return fmt.Errorf("assistant.system_prompt is required for assistant")
+	}
+	if c.Assistant.ChatPrompt == "" {
+		return fmt.Errorf("assistant.chat_prompt is required for assistant")
+	}
+	if c.Assistant.DiscussionChatID == 0 {
+		return fmt.Errorf("telegram.discussion_chat_id is required for assistant")
+	}
+	if !c.Assistant.AllowAllUsers && len(c.Assistant.AllowedUserIDs) == 0 {
+		return fmt.Errorf("telegram.allowed_user_ids requires at least one user for assistant")
+	}
+	if c.DeepSeek.APIKey == "" {
+		return fmt.Errorf("DEEPSEEK_API_KEY is required for assistant")
+	}
+	return nil
+}
+
 func envOr(key, fallback string) string {
-	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
-		return v
+	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+		return value
 	}
 	return fallback
 }
 
-func splitCommaList(value string) []string {
-	if strings.TrimSpace(value) == "" {
-		return nil
+func positiveDuration(name, value string) (time.Duration, error) {
+	duration, err := time.ParseDuration(value)
+	if err != nil || duration <= 0 {
+		return 0, fmt.Errorf("%s must be a positive duration", name)
 	}
+	return duration, nil
+}
 
-	parts := strings.Split(value, ",")
-	items := make([]string, 0, len(parts))
-	for _, part := range parts {
-		item := strings.TrimSpace(part)
-		if item == "" {
-			continue
-		}
-		items = append(items, item)
+func nonNegativeDuration(name, value string) (time.Duration, error) {
+	duration, err := time.ParseDuration(value)
+	if err != nil || duration < 0 {
+		return 0, fmt.Errorf("%s must be a non-negative duration", name)
 	}
-
-	return items
+	return duration, nil
 }
