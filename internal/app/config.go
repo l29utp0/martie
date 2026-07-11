@@ -48,6 +48,16 @@ type AssistantConfig struct {
 	LogMemory          bool
 	ConversationTTL    time.Duration
 	HistoryExchanges   int
+	PtchanContext      PtchanContextConfig
+}
+
+type PtchanContextConfig struct {
+	Enabled         bool
+	BaseURL         string
+	Timeout         time.Duration
+	CacheTTL        time.Duration
+	MaxReplies      int
+	MaxContextRunes int
 }
 
 type DeepSeekConfig struct {
@@ -126,6 +136,16 @@ type fileAssistantConfig struct {
 	ChatPrompt    string              `toml:"chat_prompt"`
 	RateLimit     fileRateLimitConfig `toml:"rate_limit"`
 	Memory        fileMemoryConfig    `toml:"memory"`
+	PtchanContext filePtchanContext   `toml:"ptchan_context"`
+}
+
+type filePtchanContext struct {
+	Enabled         bool   `toml:"enabled"`
+	BaseURL         string `toml:"base_url"`
+	Timeout         string `toml:"timeout"`
+	CacheTTL        string `toml:"cache_ttl"`
+	MaxReplies      int    `toml:"max_replies"`
+	MaxContextRunes int    `toml:"max_context_runes"`
 }
 
 type fileMemoryConfig struct {
@@ -207,6 +227,13 @@ func LoadConfig() (Config, error) {
 				GlobalLimit: 100,
 				GlobalBurst: 12,
 			},
+			PtchanContext: filePtchanContext{
+				BaseURL:         "https://ptchan.org",
+				Timeout:         "5s",
+				CacheTTL:        "60s",
+				MaxReplies:      10,
+				MaxContextRunes: 8000,
+			},
 		},
 		DeepSeek: fileDeepSeekConfig{
 			Model:     "deepseek-v4-flash",
@@ -259,6 +286,12 @@ func LoadConfig() (Config, error) {
 			MaxInputRunes:      raw.Assistant.MaxInputRunes,
 			LogMemory:          raw.Assistant.LogMemory,
 			HistoryExchanges:   raw.Assistant.Memory.HistoryExchanges,
+			PtchanContext: PtchanContextConfig{
+				Enabled:         raw.Assistant.PtchanContext.Enabled,
+				BaseURL:         strings.TrimRight(strings.TrimSpace(raw.Assistant.PtchanContext.BaseURL), "/"),
+				MaxReplies:      raw.Assistant.PtchanContext.MaxReplies,
+				MaxContextRunes: raw.Assistant.PtchanContext.MaxContextRunes,
+			},
 		},
 		DeepSeek: DeepSeekConfig{
 			APIKey:    strings.TrimSpace(os.Getenv("DEEPSEEK_API_KEY")),
@@ -291,6 +324,15 @@ func LoadConfig() (Config, error) {
 	}
 	if cfg.Assistant.GlobalRequestLimit <= 0 || cfg.Assistant.GlobalRequestBurst <= 0 || cfg.Assistant.GlobalRequestBurst > cfg.Assistant.GlobalRequestLimit {
 		return Config{}, fmt.Errorf("assistant.rate_limit.global_burst must be positive and no greater than global_limit")
+	}
+	if cfg.Assistant.PtchanContext.MaxReplies <= 0 {
+		return Config{}, fmt.Errorf("assistant.ptchan_context.max_replies must be positive")
+	}
+	if cfg.Assistant.PtchanContext.MaxContextRunes <= 0 {
+		return Config{}, fmt.Errorf("assistant.ptchan_context.max_context_runes must be positive")
+	}
+	if cfg.Assistant.PtchanContext.Enabled && cfg.Assistant.PtchanContext.BaseURL == "" {
+		return Config{}, fmt.Errorf("assistant.ptchan_context.base_url is required when enabled")
 	}
 	if cfg.DeepSeek.Model == "" {
 		return Config{}, fmt.Errorf("deepseek.model is required")
@@ -347,6 +389,12 @@ func LoadConfig() (Config, error) {
 		return Config{}, err
 	}
 	if cfg.Assistant.RateLimitWindow, err = positiveDuration("assistant.rate_limit.window", raw.Assistant.RateLimit.Window); err != nil {
+		return Config{}, err
+	}
+	if cfg.Assistant.PtchanContext.Timeout, err = positiveDuration("assistant.ptchan_context.timeout", raw.Assistant.PtchanContext.Timeout); err != nil {
+		return Config{}, err
+	}
+	if cfg.Assistant.PtchanContext.CacheTTL, err = positiveDuration("assistant.ptchan_context.cache_ttl", raw.Assistant.PtchanContext.CacheTTL); err != nil {
 		return Config{}, err
 	}
 	if cfg.DeepSeek.Timeout, err = positiveDuration("deepseek.timeout", raw.DeepSeek.Timeout); err != nil {

@@ -49,6 +49,7 @@ type assistant struct {
 	users     map[int64]userRateLimiter
 	replies   *rate.Limiter
 	history   map[conversationKey]*conversation
+	ptchan    *ptchanContextSource
 }
 
 type userRateLimiter struct {
@@ -323,7 +324,12 @@ func (c *assistant) handle(ctx context.Context, request assistantRequest) bool {
 	if hasReplyContext {
 		c.metrics.observeAssistantContext("reply")
 	}
-	messages = append(messages, deepseek.Message{Role: deepseek.RoleUser, Content: formatUserMessage(c.text, userAlias, userMessage)})
+	completionUserMessage := userMessage
+	if externalContext, ok := c.ptchan.contextForRequest(ctx, request); ok {
+		c.metrics.observeAssistantContext("ptchan")
+		completionUserMessage = withExternalContext(userMessage, externalContext)
+	}
+	messages = append(messages, deepseek.Message{Role: deepseek.RoleUser, Content: formatUserMessage(c.text, userAlias, completionUserMessage)})
 	systemPrompt := c.cfg.SystemPrompt + "\n\n" + c.cfg.ChatPrompt
 	if c.cfg.LogMemory {
 		c.logger.Debug("assistant memory system prompt", "content", systemPrompt)

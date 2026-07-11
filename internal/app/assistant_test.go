@@ -16,6 +16,7 @@ import (
 
 	"martie/internal/deepseek"
 	"martie/internal/localization"
+	"martie/internal/ptchan"
 	"martie/internal/telegram"
 )
 
@@ -371,6 +372,102 @@ func TestChatHandleSendsCompletion(t *testing.T) {
 	}
 	if sender.requests[0] != want {
 		t.Fatalf("Send() request = %+v, want %+v", sender.requests[0], want)
+	}
+}
+
+func TestChatHandleAddsPtchanContextWithoutStoringIt(t *testing.T) {
+	completer := &fakeAssistantCompleter{
+		completion: deepseek.Completion{Text: "that thread is about chat control", FinishReason: deepseek.FinishStop},
+	}
+	assistant := testAssistantHandler(completer, &fakeAssistantSender{})
+	assistant.ptchan = testPtchanContextSource(&fakePtchanFetcher{
+		thread: ptchan.Thread{
+			Board:   "i",
+			PostID:  303160,
+			Name:    "Anónimo",
+			Message: "op",
+			Replies: []ptchan.Post{
+				{PostID: 303200, Name: "Anónimo", Message: "reply"},
+			},
+		},
+	})
+	request := assistantRequest{
+		MessageID:       42,
+		MessageThreadID: 7,
+		UserID:          10,
+		Text:            "what is going on https://ptchan.org/i/thread/303160.html#303200",
+	}
+
+	assistant.handle(context.Background(), request)
+
+	if len(completer.messages) != 1 {
+		t.Fatalf("completion messages = %+v", completer.messages)
+	}
+	content := completer.messages[0].Content
+	for _, want := range []string{
+		"External context from ptchan.org follows.",
+		"BEGIN PTCHAN CONTEXT",
+		"OP 303160 by Anónimo:\nop",
+		"Reply 303200 by Anónimo:\nreply",
+		"END PTCHAN CONTEXT",
+		"User request:\nwhat is going on https://ptchan.org/i/thread/303160.html#303200",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("completion message missing %q:\n%s", want, content)
+		}
+	}
+
+	key := conversationKey{chatID: assistant.cfg.DiscussionChatID, threadID: request.MessageThreadID}
+	if got := assistant.history[key].exchanges[0].userText; got != request.Text {
+		t.Fatalf("stored user text = %q, want original request", got)
+	}
+}
+
+func TestChatHandleAddsPtchanContextFromReplyText(t *testing.T) {
+	completer := &fakeAssistantCompleter{
+		completion: deepseek.Completion{Text: "that thread is about chat control", FinishReason: deepseek.FinishStop},
+	}
+	assistant := testAssistantHandler(completer, &fakeAssistantSender{})
+	assistant.ptchan = testPtchanContextSource(&fakePtchanFetcher{
+		thread: ptchan.Thread{
+			Board:   "i",
+			PostID:  303160,
+			Name:    "Anónimo",
+			Message: "op",
+		},
+	})
+	request := assistantRequest{
+		MessageID:       42,
+		MessageThreadID: 7,
+		UserID:          10,
+		Text:            "what is going on here?",
+		ReplyText:       "thread https://ptchan.org/i/thread/303160.html",
+		ReplyUserID:     11,
+		ReplyUsername:   "alice",
+	}
+
+	assistant.handle(context.Background(), request)
+
+	if len(completer.messages) != 1 {
+		t.Fatalf("completion messages = %+v", completer.messages)
+	}
+	content := completer.messages[0].Content
+	for _, want := range []string{
+		"BEGIN PTCHAN CONTEXT",
+		"OP 303160 by Anónimo:\nop",
+		"END PTCHAN CONTEXT",
+		"User request:\nMessage being replied to from @assistant_user_0002:",
+		"thread https://ptchan.org/i/thread/303160.html",
+		"Current request:\nwhat is going on here?",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("completion message missing %q:\n%s", want, content)
+		}
+	}
+
+	key := conversationKey{chatID: assistant.cfg.DiscussionChatID, threadID: request.MessageThreadID}
+	if got := assistant.history[key].exchanges[0].userText; got != "Message being replied to from @assistant_user_0002:\nthread https://ptchan.org/i/thread/303160.html\n\nCurrent request:\nwhat is going on here?" {
+		t.Fatalf("stored user text = %q", got)
 	}
 }
 

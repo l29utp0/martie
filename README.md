@@ -97,6 +97,8 @@ Access to the assistant is fail-closed by default. Configure `telegram.allowed_u
 
 When the assistant is enabled, addressed message text and recent conversation context are sent to the configured DeepSeek API. Telegram identities are replaced with temporary aliases, but message content is not anonymized.
 
+The assistant can optionally enrich requests that contain ptchan thread links. When `assistant.ptchan_context.enabled` is true, Martie fetches the live thread JSON from ptchan, wraps a bounded OP + recent replies snapshot as untrusted external context, and sends that only for the current completion. The fetched snapshot is not persisted in conversation history.
+
 ## Development
 
 ```bash

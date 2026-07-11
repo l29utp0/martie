@@ -39,6 +39,14 @@ user_burst = 4
 global_limit = 80
 global_burst = 10
 
+[assistant.ptchan_context]
+enabled = true
+base_url = "https://ptchan.example.com/"
+timeout = "3s"
+cache_ttl = "45s"
+max_replies = 4
+max_context_runes = 2000
+
 [deepseek]
 model = "deepseek-test"
 max_tokens = 300
@@ -100,6 +108,9 @@ page_url = "https://example.com/live"
 	if cfg.Assistant.HistoryExchanges != 6 || cfg.Assistant.MaxInputRunes != 2000 || !cfg.Assistant.LogMemory || cfg.Assistant.UserRequestLimit != 20 || cfg.Assistant.UserRequestBurst != 4 || cfg.Assistant.GlobalRequestLimit != 80 || cfg.Assistant.GlobalRequestBurst != 10 {
 		t.Fatalf("assistant config = %+v", cfg.Assistant)
 	}
+	if !cfg.Assistant.PtchanContext.Enabled || cfg.Assistant.PtchanContext.BaseURL != "https://ptchan.example.com" || cfg.Assistant.PtchanContext.Timeout != 3*time.Second || cfg.Assistant.PtchanContext.CacheTTL != 45*time.Second || cfg.Assistant.PtchanContext.MaxReplies != 4 || cfg.Assistant.PtchanContext.MaxContextRunes != 2000 {
+		t.Fatalf("ptchan context config = %+v", cfg.Assistant.PtchanContext)
+	}
 	if cfg.DeepSeek.Model != "deepseek-test" || cfg.DeepSeek.MaxTokens != 300 {
 		t.Fatalf("deepseek config = %+v", cfg.DeepSeek)
 	}
@@ -136,6 +147,9 @@ system_prompt = "You are {{name}}."
 	}
 	if cfg.Locale != localization.English || !cfg.Assistant.AllowAllUsers || cfg.Assistant.MaxInputRunes != 4096 || cfg.Assistant.ConversationTTL != 10*time.Minute || cfg.Assistant.HistoryExchanges != 8 || cfg.Assistant.RateLimitWindow != time.Hour || cfg.Assistant.UserRequestLimit != 25 || cfg.Assistant.UserRequestBurst != 6 || cfg.Assistant.GlobalRequestLimit != 100 || cfg.Assistant.GlobalRequestBurst != 12 {
 		t.Fatalf("assistant defaults were not applied: %+v", cfg.Assistant)
+	}
+	if cfg.Assistant.PtchanContext.Enabled || cfg.Assistant.PtchanContext.BaseURL != "https://ptchan.org" || cfg.Assistant.PtchanContext.Timeout != 5*time.Second || cfg.Assistant.PtchanContext.CacheTTL != time.Minute || cfg.Assistant.PtchanContext.MaxReplies != 10 || cfg.Assistant.PtchanContext.MaxContextRunes != 8000 {
+		t.Fatalf("ptchan context defaults were not applied: %+v", cfg.Assistant.PtchanContext)
 	}
 	if cfg.DeepSeek.Model != "deepseek-v4-flash" || cfg.DeepSeek.MaxTokens != 500 || cfg.DeepSeek.Timeout != time.Minute || cfg.Catalog.BaseURL != "https://ptchan.org" || cfg.Catalog.PollInterval != time.Minute || cfg.Catalog.Filter.MaxThreadAge != 0 || cfg.Catalog.PruneAfter != 720*time.Hour || cfg.Streams.PollInterval != time.Minute || cfg.Runtime.Logging.Level != slog.LevelInfo || cfg.Runtime.Logging.Format != LogText || cfg.Streams.EndMissThreshold != 2 || cfg.Storage.SQLitePath != "data/bot.db" {
 		t.Fatalf("defaults were not applied: %+v", cfg)
@@ -176,6 +190,10 @@ func TestLoadConfigRejectsInvalidValues(t *testing.T) {
 		{name: "zero global limit", old: "global_limit = 100", replacement: "global_limit = 0", want: "assistant.rate_limit.global_burst"},
 		{name: "zero global burst", old: "global_burst = 12", replacement: "global_burst = 0", want: "assistant.rate_limit.global_burst"},
 		{name: "global burst above limit", old: "global_burst = 12", replacement: "global_burst = 101", want: "assistant.rate_limit.global_burst"},
+		{name: "zero ptchan context replies", old: "max_replies = 10", replacement: "max_replies = 0", want: "assistant.ptchan_context.max_replies"},
+		{name: "zero ptchan context runes", old: "max_context_runes = 8000", replacement: "max_context_runes = 0", want: "assistant.ptchan_context.max_context_runes"},
+		{name: "invalid ptchan context timeout", old: `timeout = "5s"`, replacement: `timeout = "later"`, want: "assistant.ptchan_context.timeout"},
+		{name: "invalid ptchan context cache ttl", old: `cache_ttl = "60s"`, replacement: `cache_ttl = "later"`, want: "assistant.ptchan_context.cache_ttl"},
 		{name: "empty model", old: `model = "deepseek-v4-flash"`, replacement: `model = " "`, want: "deepseek.model"},
 		{name: "zero max tokens", old: "max_tokens = 500", replacement: "max_tokens = 0", want: "deepseek.max_tokens"},
 		{name: "empty catalog URL", old: `base_url = "https://ptchan.org"`, replacement: `base_url = " "`, want: "catalog.base_url"},
@@ -390,6 +408,14 @@ user_limit = 25
 user_burst = 6
 global_limit = 100
 global_burst = 12
+
+[assistant.ptchan_context]
+enabled = false
+base_url = "https://ptchan-context.example"
+timeout = "5s"
+cache_ttl = "60s"
+max_replies = 10
+max_context_runes = 8000
 
 [deepseek]
 model = "deepseek-v4-flash"
