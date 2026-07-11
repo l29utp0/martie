@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -50,6 +51,7 @@ type assistant struct {
 	replies   *rate.Limiter
 	history   map[conversationKey]*conversation
 	ptchan    *ptchanContextSource
+	traces    *assistantTraceDumper
 }
 
 type userRateLimiter struct {
@@ -310,6 +312,7 @@ func (c *assistant) handle(ctx context.Context, request assistantRequest) bool {
 		c.history[key] = current
 	}
 	messages := current.messages(c.text)
+	storedBefore := append([]deepseek.Message(nil), messages...)
 	if len(messages) > 0 {
 		c.metrics.observeAssistantContext("history")
 	}
@@ -325,21 +328,40 @@ func (c *assistant) handle(ctx context.Context, request assistantRequest) bool {
 		c.metrics.observeAssistantContext("reply")
 	}
 	completionUserMessage := userMessage
+	usedPtchanContext := false
 	if externalContext, ok := c.ptchan.contextForRequest(ctx, request); ok {
 		c.metrics.observeAssistantContext("ptchan")
 		completionUserMessage = withExternalContext(userMessage, externalContext)
+		usedPtchanContext = true
 	}
 	messages = append(messages, deepseek.Message{Role: deepseek.RoleUser, Content: formatUserMessage(c.text, userAlias, completionUserMessage)})
 	systemPrompt := c.cfg.SystemPrompt + "\n\n" + c.cfg.ChatPrompt
+	trace := &assistantTrace{
+		StartedAt:     startedAt,
+		MessageID:     request.MessageID,
+		ThreadID:      request.MessageThreadID,
+		UserAlias:     userAlias,
+		UsedHistory:   len(storedBefore) > 0,
+		UsedReply:     hasReplyContext,
+		UsedPtchan:    usedPtchanContext,
+		StoredBefore:  storedBefore,
+		StoredAfter:   append([]deepseek.Message(nil), storedBefore...),
+		SystemPrompt:  systemPrompt,
+		ModelMessages: append([]deepseek.Message(nil), messages...),
+	}
+	defer func() { c.dumpTrace(trace) }()
 	if c.cfg.LogMemory {
 		c.logger.Debug("assistant memory system prompt", "content", systemPrompt)
 	}
 	c.logMemory("request", key, messages)
 	completion, err := c.completer.Complete(ctx, systemPrompt, messages)
+	trace.Completion = completion
 	stopTyping()
 	<-typingDone
 	c.metrics.observeAICompletion(time.Since(startedAt), completion, err)
 	if err != nil {
+		trace.Outcome = "completion error"
+		trace.Err = err
 		c.logger.Warn("assistant completion failed", "message_id", request.MessageID, "chat", request.ChatTitle, "chat_id", c.cfg.DiscussionChatID, "error", err)
 		if ctx.Err() != nil {
 			c.discardEmptyConversation(key)
@@ -362,16 +384,32 @@ func (c *assistant) handle(ctx context.Context, request assistantRequest) bool {
 		message = telegram.MarkdownMessage(renderedText)
 	}
 	if !c.sendReply(ctx, request, message) {
+		trace.Outcome = "delivery error"
 		c.discardEmptyConversation(key)
 		return ctx.Err() == nil
 	}
 	removed := current.remember(userAlias, userMessage, text, time.Now(), c.cfg.HistoryExchanges)
+	trace.Outcome = "stored"
+	trace.StoredAfter = current.messages(c.text)
+	trace.RemovedExchanges = removed
 	c.metrics.setActiveConversations(len(c.history))
 	if removed > 0 && c.cfg.LogMemory {
 		c.logger.Debug("assistant memory evicted", "chat_id", key.chatID, "thread_id", key.threadID, "removed", removed, "remaining", len(current.exchanges), "runes", current.runes())
 	}
 	c.logMemory("stored", key, current.messages(c.text))
 	return true
+}
+
+func (c *assistant) dumpTrace(trace *assistantTrace) {
+	if c.traces == nil {
+		return
+	}
+	path, err := c.traces.dump(trace)
+	if err != nil {
+		c.logger.Warn("assistant trace dump failed", "message_id", trace.MessageID, "thread_id", trace.ThreadID, "error", err)
+		return
+	}
+	c.logger.Info("assistant trace dumped", "trace_id", filepath.Base(path), "message_id", trace.MessageID, "thread_id", trace.ThreadID, "path", path)
 }
 
 func (c *assistant) discardEmptyConversation(key conversationKey) {

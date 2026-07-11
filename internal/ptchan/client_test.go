@@ -149,6 +149,28 @@ func TestClientFetchThread(t *testing.T) {
 	}
 }
 
+func TestClientFetchThreadRejectsOversizedResponse(t *testing.T) {
+	client := &Client{
+		baseURL: "https://ptchan.org",
+		http: &http.Client{
+			Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				body := `{"board":"i","postId":42,"nomarkup":"` + strings.Repeat("x", maxThreadResponseBytes) + `"}`
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Status:     "200 OK",
+					Header:     make(http.Header),
+					Body:       io.NopCloser(strings.NewReader(body)),
+				}, nil
+			}),
+		},
+	}
+
+	_, err := client.FetchThread(context.Background(), "i", 42)
+	if err == nil || !strings.Contains(err.Error(), "response exceeds") {
+		t.Fatalf("FetchThread() error = %v, want oversized response error", err)
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {

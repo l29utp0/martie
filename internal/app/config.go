@@ -46,9 +46,16 @@ type AssistantConfig struct {
 	ChatPrompt         string
 	MaxInputRunes      int
 	LogMemory          bool
+	Trace              AssistantTraceConfig
 	ConversationTTL    time.Duration
 	HistoryExchanges   int
 	PtchanContext      PtchanContextConfig
+}
+
+type AssistantTraceConfig struct {
+	Enabled  bool
+	Dir      string
+	MaxFiles int
 }
 
 type PtchanContextConfig struct {
@@ -137,6 +144,12 @@ type fileAssistantConfig struct {
 	RateLimit     fileRateLimitConfig `toml:"rate_limit"`
 	Memory        fileMemoryConfig    `toml:"memory"`
 	PtchanContext filePtchanContext   `toml:"ptchan_context"`
+	Trace         fileAssistantTrace  `toml:"trace"`
+}
+
+type fileAssistantTrace struct {
+	Enabled  bool `toml:"enabled"`
+	MaxFiles int  `toml:"max_files"`
 }
 
 type filePtchanContext struct {
@@ -234,6 +247,7 @@ func LoadConfig() (Config, error) {
 				MaxReplies:      10,
 				MaxContextRunes: 8000,
 			},
+			Trace: fileAssistantTrace{MaxFiles: 100},
 		},
 		DeepSeek: fileDeepSeekConfig{
 			Model:     "deepseek-v4-flash",
@@ -285,7 +299,12 @@ func LoadConfig() (Config, error) {
 			GlobalRequestBurst: raw.Assistant.RateLimit.GlobalBurst,
 			MaxInputRunes:      raw.Assistant.MaxInputRunes,
 			LogMemory:          raw.Assistant.LogMemory,
-			HistoryExchanges:   raw.Assistant.Memory.HistoryExchanges,
+			Trace: AssistantTraceConfig{
+				Enabled:  raw.Assistant.Trace.Enabled,
+				Dir:      filepath.Clean(envOr("MARTIE_ASSISTANT_TRACE_DIR", "data/traces")),
+				MaxFiles: raw.Assistant.Trace.MaxFiles,
+			},
+			HistoryExchanges: raw.Assistant.Memory.HistoryExchanges,
 			PtchanContext: PtchanContextConfig{
 				Enabled:         raw.Assistant.PtchanContext.Enabled,
 				BaseURL:         strings.TrimRight(strings.TrimSpace(raw.Assistant.PtchanContext.BaseURL), "/"),
@@ -333,6 +352,9 @@ func LoadConfig() (Config, error) {
 	}
 	if cfg.Assistant.PtchanContext.Enabled && cfg.Assistant.PtchanContext.BaseURL == "" {
 		return Config{}, fmt.Errorf("assistant.ptchan_context.base_url is required when enabled")
+	}
+	if cfg.Assistant.Trace.MaxFiles <= 0 {
+		return Config{}, fmt.Errorf("assistant.trace.max_files must be positive")
 	}
 	if cfg.DeepSeek.Model == "" {
 		return Config{}, fmt.Errorf("deepseek.model is required")

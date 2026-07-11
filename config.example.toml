@@ -56,6 +56,12 @@ cache_ttl = "60s"
 max_replies = 10
 max_context_runes = 8000
 
+[assistant.trace]
+# Write one human-readable trace for each assistant interaction sent to the model.
+enabled = false
+# Oldest traces are removed after this many files.
+max_files = 100
+
 [deepseek]
 # Completion model sent to DeepSeek.
 model = "deepseek-v4-flash"

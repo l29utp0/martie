@@ -4,12 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"time"
 )
+
+const maxThreadResponseBytes = 4 << 20
 
 type Client struct {
 	baseURL string
@@ -104,9 +107,16 @@ func (c *Client) FetchThread(ctx context.Context, board string, threadID int64) 
 		return Thread{}, fmt.Errorf("unexpected thread status: %s", resp.Status)
 	}
 
+	body := &io.LimitedReader{R: resp.Body, N: maxThreadResponseBytes + 1}
 	var thread Thread
-	if err := json.NewDecoder(resp.Body).Decode(&thread); err != nil {
+	if err := json.NewDecoder(body).Decode(&thread); err != nil {
+		if body.N == 0 {
+			return Thread{}, fmt.Errorf("thread response exceeds %d bytes", maxThreadResponseBytes)
+		}
 		return Thread{}, fmt.Errorf("decode thread: %w", err)
+	}
+	if body.N == 0 {
+		return Thread{}, fmt.Errorf("thread response exceeds %d bytes", maxThreadResponseBytes)
 	}
 	return thread, nil
 }

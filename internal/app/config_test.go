@@ -47,6 +47,10 @@ cache_ttl = "45s"
 max_replies = 4
 max_context_runes = 2000
 
+[assistant.trace]
+enabled = true
+max_files = 25
+
 [deepseek]
 model = "deepseek-test"
 max_tokens = 300
@@ -82,6 +86,7 @@ page_url = "https://example.com/live"
 	t.Setenv("TELEGRAM_BOT_TOKEN", " token ")
 	t.Setenv("DEEPSEEK_API_KEY", " key ")
 	t.Setenv("SQLITE_PATH", "data/test.db")
+	t.Setenv("MARTIE_ASSISTANT_TRACE_DIR", "data/test-traces")
 
 	cfg, err := LoadConfig()
 	if err != nil {
@@ -110,6 +115,9 @@ page_url = "https://example.com/live"
 	}
 	if !cfg.Assistant.PtchanContext.Enabled || cfg.Assistant.PtchanContext.BaseURL != "https://ptchan.example.com" || cfg.Assistant.PtchanContext.Timeout != 3*time.Second || cfg.Assistant.PtchanContext.CacheTTL != 45*time.Second || cfg.Assistant.PtchanContext.MaxReplies != 4 || cfg.Assistant.PtchanContext.MaxContextRunes != 2000 {
 		t.Fatalf("ptchan context config = %+v", cfg.Assistant.PtchanContext)
+	}
+	if !cfg.Assistant.Trace.Enabled || cfg.Assistant.Trace.Dir != "data/test-traces" || cfg.Assistant.Trace.MaxFiles != 25 {
+		t.Fatalf("assistant trace config = %+v", cfg.Assistant.Trace)
 	}
 	if cfg.DeepSeek.Model != "deepseek-test" || cfg.DeepSeek.MaxTokens != 300 {
 		t.Fatalf("deepseek config = %+v", cfg.DeepSeek)
@@ -140,6 +148,7 @@ system_prompt = "You are {{name}}."
 `)
 	t.Setenv("CONFIG_FILE", path)
 	t.Setenv("SQLITE_PATH", "")
+	t.Setenv("MARTIE_ASSISTANT_TRACE_DIR", "")
 
 	cfg, err := LoadConfig()
 	if err != nil {
@@ -150,6 +159,9 @@ system_prompt = "You are {{name}}."
 	}
 	if cfg.Assistant.PtchanContext.Enabled || cfg.Assistant.PtchanContext.BaseURL != "https://ptchan.org" || cfg.Assistant.PtchanContext.Timeout != 5*time.Second || cfg.Assistant.PtchanContext.CacheTTL != time.Minute || cfg.Assistant.PtchanContext.MaxReplies != 10 || cfg.Assistant.PtchanContext.MaxContextRunes != 8000 {
 		t.Fatalf("ptchan context defaults were not applied: %+v", cfg.Assistant.PtchanContext)
+	}
+	if cfg.Assistant.Trace.Enabled || cfg.Assistant.Trace.Dir != "data/traces" || cfg.Assistant.Trace.MaxFiles != 100 {
+		t.Fatalf("assistant trace defaults were not applied: %+v", cfg.Assistant.Trace)
 	}
 	if cfg.DeepSeek.Model != "deepseek-v4-flash" || cfg.DeepSeek.MaxTokens != 500 || cfg.DeepSeek.Timeout != time.Minute || cfg.Catalog.BaseURL != "https://ptchan.org" || cfg.Catalog.PollInterval != time.Minute || cfg.Catalog.Filter.MaxThreadAge != 0 || cfg.Catalog.PruneAfter != 720*time.Hour || cfg.Streams.PollInterval != time.Minute || cfg.Runtime.Logging.Level != slog.LevelInfo || cfg.Runtime.Logging.Format != LogText || cfg.Streams.EndMissThreshold != 2 || cfg.Storage.SQLitePath != "data/bot.db" {
 		t.Fatalf("defaults were not applied: %+v", cfg)
@@ -194,6 +206,7 @@ func TestLoadConfigRejectsInvalidValues(t *testing.T) {
 		{name: "zero ptchan context runes", old: "max_context_runes = 8000", replacement: "max_context_runes = 0", want: "assistant.ptchan_context.max_context_runes"},
 		{name: "invalid ptchan context timeout", old: `timeout = "5s"`, replacement: `timeout = "later"`, want: "assistant.ptchan_context.timeout"},
 		{name: "invalid ptchan context cache ttl", old: `cache_ttl = "60s"`, replacement: `cache_ttl = "later"`, want: "assistant.ptchan_context.cache_ttl"},
+		{name: "zero assistant trace files", old: "max_files = 100", replacement: "max_files = 0", want: "assistant.trace.max_files"},
 		{name: "empty model", old: `model = "deepseek-v4-flash"`, replacement: `model = " "`, want: "deepseek.model"},
 		{name: "zero max tokens", old: "max_tokens = 500", replacement: "max_tokens = 0", want: "deepseek.max_tokens"},
 		{name: "empty catalog URL", old: `base_url = "https://ptchan.org"`, replacement: `base_url = " "`, want: "catalog.base_url"},
@@ -416,6 +429,10 @@ timeout = "5s"
 cache_ttl = "60s"
 max_replies = 10
 max_context_runes = 8000
+
+[assistant.trace]
+enabled = false
+max_files = 100
 
 [deepseek]
 model = "deepseek-v4-flash"

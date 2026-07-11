@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -420,6 +422,41 @@ func TestChatHandleAddsPtchanContextWithoutStoringIt(t *testing.T) {
 	key := conversationKey{chatID: assistant.cfg.DiscussionChatID, threadID: request.MessageThreadID}
 	if got := assistant.history[key].exchanges[0].userText; got != request.Text {
 		t.Fatalf("stored user text = %q, want original request", got)
+	}
+}
+
+func TestChatHandleDumpsExactModelRequestAndStoredState(t *testing.T) {
+	assistant := testAssistantHandler(&fakeAssistantCompleter{
+		completion: deepseek.Completion{Text: "answer", FinishReason: deepseek.FinishStop},
+	}, &fakeAssistantSender{})
+	assistant.ptchan = testPtchanContextSource(&fakePtchanFetcher{
+		thread: ptchan.Thread{Board: "i", PostID: 303160, Message: "external op"},
+	})
+	dir := t.TempDir()
+	assistant.traces = newAssistantTraceDumper(AssistantTraceConfig{Enabled: true, Dir: dir, MaxFiles: 100})
+
+	assistant.handle(context.Background(), assistantRequest{
+		MessageID:       42,
+		MessageThreadID: 7,
+		UserID:          10,
+		Text:            "explain https://ptchan.org/i/thread/303160.html",
+	})
+
+	files, err := filepath.Glob(filepath.Join(dir, assistantTracePattern))
+	if err != nil || len(files) != 1 {
+		t.Fatalf("trace files = %v, error = %v", files, err)
+	}
+	contents, err := os.ReadFile(files[0])
+	if err != nil {
+		t.Fatalf("read trace: %v", err)
+	}
+	trace := string(contents)
+	if !strings.Contains(trace, "MODEL REQUEST") || !strings.Contains(trace, "external op") {
+		t.Fatalf("trace does not contain exact model context:\n%s", trace)
+	}
+	storedAfter := trace[strings.Index(trace, "STORED AFTER"):]
+	if strings.Contains(storedAfter, "external op") || !strings.Contains(storedAfter, "explain https://ptchan.org/i/thread/303160.html") {
+		t.Fatalf("stored state contains transient context or omits request:\n%s", storedAfter)
 	}
 }
 
