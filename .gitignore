@@ -9,6 +9,7 @@ data/
 *.test
 *.out
 coverage.out
+martie-assistant-*.trace
 
 # macOS
 .DS_Store

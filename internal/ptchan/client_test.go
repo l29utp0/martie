@@ -98,6 +98,79 @@ func TestClientFetchCatalogStatusFailure(t *testing.T) {
 	}
 }
 
+func TestClientFetchThread(t *testing.T) {
+	var gotRequest *http.Request
+	client := &Client{
+		baseURL: "https://ptchan.org",
+		http: &http.Client{
+			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				gotRequest = req
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Status:     "200 OK",
+					Header:     make(http.Header),
+					Body: io.NopCloser(strings.NewReader(`{
+						"_id": "thread-1",
+						"date": "2026-04-14T10:00:00Z",
+						"board": "i",
+						"name": "Anónimo",
+						"nomarkup": "op",
+						"postId": 42,
+						"replies": [{
+							"date": "2026-04-14T10:01:00Z",
+							"board": "i",
+							"name": "Anon",
+							"nomarkup": ">>42\r\nreply",
+							"thread": 42,
+							"postId": 43,
+							"quotes": [{"thread": 42, "postId": 42}]
+						}]
+					}`)),
+				}, nil
+			}),
+		},
+	}
+
+	thread, err := client.FetchThread(context.Background(), "i", 42)
+	if err != nil {
+		t.Fatalf("FetchThread() error = %v", err)
+	}
+	if gotRequest == nil {
+		t.Fatal("request was not sent")
+	}
+	if gotRequest.URL.Path != "/i/thread/42.json" {
+		t.Fatalf("path = %q, want /i/thread/42.json", gotRequest.URL.Path)
+	}
+	if thread.Board != "i" || thread.PostID != 42 || thread.Message != "op" {
+		t.Fatalf("thread = %+v", thread)
+	}
+	if len(thread.Replies) != 1 || thread.Replies[0].PostID != 43 || len(thread.Replies[0].Quotes) != 1 {
+		t.Fatalf("replies = %+v", thread.Replies)
+	}
+}
+
+func TestClientFetchThreadRejectsOversizedResponse(t *testing.T) {
+	client := &Client{
+		baseURL: "https://ptchan.org",
+		http: &http.Client{
+			Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				body := `{"board":"i","postId":42,"nomarkup":"` + strings.Repeat("x", maxThreadResponseBytes) + `"}`
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Status:     "200 OK",
+					Header:     make(http.Header),
+					Body:       io.NopCloser(strings.NewReader(body)),
+				}, nil
+			}),
+		},
+	}
+
+	_, err := client.FetchThread(context.Background(), "i", 42)
+	if err == nil || !strings.Contains(err.Error(), "response exceeds") {
+		t.Fatalf("FetchThread() error = %v, want oversized response error", err)
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {

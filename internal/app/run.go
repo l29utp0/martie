@@ -109,6 +109,12 @@ func Run(
 	if cfg.runs(componentAssistant) {
 		completer := deepseek.New(cfg.DeepSeek.APIKey, cfg.DeepSeek.Model, cfg.DeepSeek.MaxTokens, cfg.DeepSeek.Timeout)
 		assistant := newAssistant(cfg.Assistant, text, store, telegramClient, completer, metrics, logger.With("component", componentAssistant))
+		assistant.traces = newAssistantTraceDumper(cfg.Assistant.Trace)
+		contextClient := catalogClient
+		if cfg.Assistant.PtchanContext.Enabled {
+			contextClient = ptchan.New(cfg.Assistant.PtchanContext.BaseURL)
+		}
+		assistant.ptchan = newPtchanContextSource(cfg.Assistant.PtchanContext, contextClient, logger.With("component", componentAssistant, "context", "ptchan"))
 		components = append(components, component{name: componentAssistant, run: assistant.run})
 	}
 	logger.Info("service starting", "components", cfg.Runtime.Components)
