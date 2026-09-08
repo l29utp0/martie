@@ -44,6 +44,33 @@ func TestChannerAdmitsConfiguredMention(t *testing.T) {
 	}
 }
 
+func TestChannerAdmitsMentionInOpeningPost(t *testing.T) {
+	channer := Responder{
+		Config: Config{
+			Mentions:      []string{"@martie"},
+			MaxInputRunes: 100,
+		},
+		Logger: discardLogger(),
+	}
+
+	request, result := channer.admit(gateway.WebhookEvent{
+		EventID: "event-1",
+		Kind:    gateway.ThreadCreated,
+		Post: gateway.Post{
+			Board:    "i",
+			ThreadID: 100,
+			PostID:   100,
+			Message:  "@Martie what is this?",
+		},
+	})
+	if result != admissionAccepted {
+		t.Fatalf("admission = %q", result)
+	}
+	if request == nil || request.Text != "what is this?" || request.Mention != "@martie" || request.PostID != 100 {
+		t.Fatalf("request = %+v", request)
+	}
+}
+
 func TestChannerAdmissionRejectsIntegrationPosts(t *testing.T) {
 	channer := Responder{
 		Config: Config{Mentions: []string{"@martie"}, MaxInputRunes: 100},
@@ -299,12 +326,15 @@ func TestChannerConsumesEventOnce(t *testing.T) {
 	if metrics.admissions[admissionAccepted] != 1 || metrics.admissions[admissionDuplicate] != 1 {
 		t.Fatalf("admissions = %v, want one accepted and one duplicate", metrics.admissions)
 	}
+	if metrics.invocations[invocationReply] != 1 {
+		t.Fatalf("invocations = %v, want one reply", metrics.invocations)
+	}
 	if metrics.outcomes[outcomePosted] != 1 {
 		t.Fatalf("outcomes = %v, want one posted", metrics.outcomes)
 	}
 }
 
-func TestChannerDoesNotPersistIgnoredEvent(t *testing.T) {
+func TestChannerDoesNotPersistUnaddressedOpeningPost(t *testing.T) {
 	store := testChannerStore(t)
 	channer := Responder{
 		Config:  Config{Mentions: []string{"@martie"}, MaxInputRunes: 100},
@@ -319,7 +349,7 @@ func TestChannerDoesNotPersistIgnoredEvent(t *testing.T) {
 			Board:    "i",
 			ThreadID: 100,
 			PostID:   100,
-			Message:  "op",
+			Message:  "opening post",
 		},
 	}
 
@@ -376,6 +406,51 @@ func TestChannerPostsReplyToFocusPost(t *testing.T) {
 	}
 	if got := poster.requests[0]; got.ref.Board != "i" || got.ref.ThreadID != 100 || got.message != ">>102\nhere is the answer" {
 		t.Fatalf("post request = %+v", got)
+	}
+}
+
+func TestChannerPostsReplyToMentionInOpeningPost(t *testing.T) {
+	store := testChannerStore(t)
+	poster := &fakePtchanPoster{reply: gateway.ReplyResponse{Board: "i", ThreadID: 100, PostID: 101}}
+	metrics := &recordingMetrics{}
+	channer := Responder{
+		Config:    Config{Mentions: []string{"@martie"}, MaxInputRunes: 100},
+		Store:     store,
+		Completer: &fakeCompleter{completion: deepseek.Completion{Text: "here is the answer", FinishReason: deepseek.FinishStop}},
+		Poster:    poster,
+		Logger:    discardLogger(),
+		Metrics:   metrics,
+		nowFunc:   func() time.Time { return time.Date(2026, time.July, 25, 12, 0, 0, 0, time.UTC) },
+	}
+	event := gateway.WebhookEvent{
+		EventID: "Ptchan:thread.created:i:100",
+		Kind:    gateway.ThreadCreated,
+		Post: gateway.Post{
+			Board:    "i",
+			ThreadID: 100,
+			PostID:   100,
+			Message:  "@martie what now?",
+		},
+	}
+
+	if err := channer.ConsumeGatewayEvent(context.Background(), event); err != nil {
+		t.Fatal(err)
+	}
+	if len(poster.requests) != 1 {
+		t.Fatalf("posted requests = %d", len(poster.requests))
+	}
+	if got := poster.requests[0]; got.ref.Board != "i" || got.ref.ThreadID != 100 || got.message != ">>100\nhere is the answer" {
+		t.Fatalf("post request = %+v", got)
+	}
+	record, ok, err := store.GetEvent(context.Background(), event.EventID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || record.Status != channerstate.EventPosted || record.PostID != 100 {
+		t.Fatalf("record = %+v, found = %t", record, ok)
+	}
+	if metrics.invocations[invocationOP] != 1 {
+		t.Fatalf("invocations = %v, want one opening post", metrics.invocations)
 	}
 }
 
@@ -722,8 +797,9 @@ type completionRequest struct {
 }
 
 type recordingMetrics struct {
-	admissions map[admissionResult]int
-	outcomes   map[string]int
+	admissions  map[admissionResult]int
+	invocations map[string]int
+	outcomes    map[string]int
 }
 
 func (m *recordingMetrics) ObserveChannerAdmission(result string) {
@@ -731,6 +807,13 @@ func (m *recordingMetrics) ObserveChannerAdmission(result string) {
 		m.admissions = make(map[admissionResult]int)
 	}
 	m.admissions[admissionResult(result)]++
+}
+
+func (m *recordingMetrics) ObserveChannerInvocation(source string) {
+	if m.invocations == nil {
+		m.invocations = make(map[string]int)
+	}
+	m.invocations[source]++
 }
 
 func (*recordingMetrics) ObserveChannerReply(string) {}

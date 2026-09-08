@@ -16,8 +16,8 @@ integration_name = "martie"
 
 # Channer is Martie's public mention responder.
 [channer]
-# A new post must contain one of these case-insensitive mentions to receive a
-# response. Whitespace and duplicate values are removed at startup.
+# An opening post or reply must contain one of these case-insensitive mentions
+# to receive a response. Whitespace and duplicate values are removed at startup.
 mentions = ["@martie"]
 # Reject a triggering post above this many Unicode code points before reading
 # context or calling the model.

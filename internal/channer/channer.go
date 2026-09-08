@@ -33,6 +33,9 @@ const (
 	outcomePostingRejected    = "posting_rejected"
 	outcomePostingUnknown     = "posting_unknown"
 	outcomeNotConfigured      = "not_configured"
+
+	invocationOP    = "op"
+	invocationReply = "reply"
 )
 
 // TerminalOutcomes lists the bounded outcome label values emitted for admitted requests.
@@ -47,6 +50,14 @@ func TerminalOutcomes() []string {
 		outcomePostingRejected,
 		outcomePostingUnknown,
 		outcomeNotConfigured,
+	}
+}
+
+// InvocationSources lists the bounded source label values for admitted requests.
+func InvocationSources() []string {
+	return []string{
+		invocationOP,
+		invocationReply,
 	}
 }
 
@@ -96,6 +107,7 @@ type Poster interface {
 
 type Metrics interface {
 	ObserveChannerAdmission(result string)
+	ObserveChannerInvocation(source string)
 	ObserveChannerReply(result string)
 	ObserveChannerContext(contextType string)
 	ObserveChannerOutcome(outcome string)
@@ -177,6 +189,7 @@ func (a Responder) ConsumeGatewayEvent(ctx context.Context, event gateway.Webhoo
 	}
 	if a.Metrics != nil {
 		a.Metrics.ObserveChannerAdmission(string(admissionAccepted))
+		a.Metrics.ObserveChannerInvocation(invocationSource(event.Kind))
 	}
 
 	a.Logger.Info("channer mention admitted", "event_id", request.EventID, "board", request.Thread.Board, "thread_id", request.Thread.ThreadID, "post_id", request.PostID, "mention", request.Mention)
@@ -524,7 +537,7 @@ func joinErrors(primary, secondary error) error {
 }
 
 func (a Responder) admit(event gateway.WebhookEvent) (*request, admissionResult) {
-	if event.Kind != gateway.PostCreated {
+	if event.Kind != gateway.PostCreated && event.Kind != gateway.ThreadCreated {
 		return nil, admissionUnsupported
 	}
 	if isIntegrationPost(event.Post) {
@@ -548,6 +561,13 @@ func (a Responder) admit(event gateway.WebhookEvent) (*request, admissionResult)
 		Text:    strings.TrimSpace(removeMentionAt(text, mention, index)),
 		Mention: mention,
 	}, admissionAccepted
+}
+
+func invocationSource(kind gateway.EventKind) string {
+	if kind == gateway.ThreadCreated {
+		return invocationOP
+	}
+	return invocationReply
 }
 
 func isIntegrationPost(post gateway.Post) bool {

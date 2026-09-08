@@ -39,7 +39,7 @@ func TestHTTPHandlerReportsReadiness(t *testing.T) {
 	}
 }
 
-func TestMetricsInitializeChannerOutcomes(t *testing.T) {
+func TestMetricsInitializeChannerOutcomesAndInvocationSources(t *testing.T) {
 	metrics := newMetrics()
 	response := httptest.NewRecorder()
 	metrics.handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/metrics", nil))
@@ -48,6 +48,8 @@ func TestMetricsInitializeChannerOutcomes(t *testing.T) {
 		`martie_channer_outcomes_total{outcome="completion_error"} 0`,
 		`martie_channer_outcomes_total{outcome="posted"} 0`,
 		`martie_channer_outcomes_total{outcome="posting_unknown"} 0`,
+		`martie_channer_invocations_total{source="op"} 0`,
+		`martie_channer_invocations_total{source="reply"} 0`,
 	} {
 		if !strings.Contains(response.Body.String(), want) {
 			t.Fatalf("metrics missing %q:\n%s", want, response.Body.String())

@@ -1,9 +1,9 @@
 # Martie
 
 Martie is a public ptchan assistant. When someone uses one of its configured
-mentions in a new post, Martie receives the event from ptchan-gateway, reads a
-safe copy of the thread, asks the configured model for a response, and posts a
-reply.
+mentions in an opening post or reply, Martie receives the event from
+ptchan-gateway, reads a safe copy of the thread, asks the configured model for
+a response, and posts a reply.
 
 Martie is intentionally a single-purpose service. It does not scrape ptchan or
 talk to it directly: ptchan-gateway is its signed boundary for events, thread
@@ -39,7 +39,8 @@ make run
 `MARTIE_ENV=prod` selects `config/prod.toml` and `.env.prod`. The complete
 setting reference is [config/example.toml](config/example.toml).
 
-Configure the gateway integration to send webhooks to:
+Configure the gateway integration to send `post.created` and `thread.created`
+webhooks to:
 
 ```text
 https://your-martie-host/internal/ptchan/events
@@ -97,6 +98,8 @@ The operational metrics are:
 - `martie_gateway_webhook_requests_total{result}` — webhook results.
 - `martie_gateway_event_deliveries_total{kind,result}` — decoded event delivery.
 - `martie_channer_admissions_total{result}` — admission decisions.
+- `martie_channer_invocations_total{source}` — admitted invocations, with
+  `source` set to `op` or `reply`.
 - `martie_channer_reply_deliveries_total{result}` — posting attempts.
 - `martie_channer_context_uses_total{type}` — context sources used.
 - `martie_channer_outcomes_total{outcome}` — terminal outcome for admitted work.

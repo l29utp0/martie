@@ -18,10 +18,11 @@ type metrics struct {
 	gatewayWebhooks *prometheus.CounterVec
 	gatewayEvents   *prometheus.CounterVec
 
-	channerAdmissions *prometheus.CounterVec
-	channerReplies    *prometheus.CounterVec
-	channerContext    *prometheus.CounterVec
-	channerOutcomes   *prometheus.CounterVec
+	channerAdmissions  *prometheus.CounterVec
+	channerInvocations *prometheus.CounterVec
+	channerReplies     *prometheus.CounterVec
+	channerContext     *prometheus.CounterVec
+	channerOutcomes    *prometheus.CounterVec
 
 	modelDuration *prometheus.HistogramVec
 	modelTokens   *prometheus.CounterVec
@@ -47,6 +48,10 @@ func newMetrics() *metrics {
 			Name: "martie_channer_admissions_total",
 			Help: "Channer input admission decisions by result.",
 		}, []string{"result"}),
+		channerInvocations: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "martie_channer_invocations_total",
+			Help: "Admitted Channer invocations by source.",
+		}, []string{"source"}),
 		channerReplies: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "martie_channer_reply_deliveries_total",
 			Help: "Channer reply delivery attempts by result.",
@@ -74,6 +79,7 @@ func newMetrics() *metrics {
 		m.gatewayWebhooks,
 		m.gatewayEvents,
 		m.channerAdmissions,
+		m.channerInvocations,
 		m.channerReplies,
 		m.channerContext,
 		m.channerOutcomes,
@@ -82,6 +88,9 @@ func newMetrics() *metrics {
 	)
 	for _, outcome := range channer.TerminalOutcomes() {
 		m.channerOutcomes.WithLabelValues(outcome)
+	}
+	for _, source := range channer.InvocationSources() {
+		m.channerInvocations.WithLabelValues(source)
 	}
 
 	return m
@@ -101,6 +110,10 @@ func (m *metrics) observeGatewayEvent(kind gateway.EventKind, result string) {
 
 func (m *metrics) ObserveChannerAdmission(result string) {
 	m.channerAdmissions.WithLabelValues(result).Inc()
+}
+
+func (m *metrics) ObserveChannerInvocation(source string) {
+	m.channerInvocations.WithLabelValues(source).Inc()
 }
 
 func (m *metrics) ObserveChannerReply(result string) {
