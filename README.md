@@ -39,12 +39,14 @@ make run
 `MARTIE_ENV=prod` selects `config/prod.toml` and `.env.prod`. The complete
 setting reference is [config/example.toml](config/example.toml).
 
-Configure the gateway integration to send `post.created` and `thread.created`
-webhooks to:
+Configure the gateway integration with webhook delivery to:
 
 ```text
 https://your-martie-host/internal/ptchan/events
 ```
+
+The gateway delivers both `thread.created` events for opening posts and
+`post.created` events for replies to configured webhooks.
 
 The integration secret variable is derived from `ptchan.integration_name`:
 `martie` becomes `PTCHAN_INTEGRATION_MARTIE_SECRET`; `-` and `.` become `_`.
@@ -55,8 +57,18 @@ The integration secret variable is derived from `ptchan.integration_name`:
 2. It ignores unsupported events, integration-origin posts, unaddressed posts,
    blank posts, and posts above the configured size limit.
 3. It stores admitted event IDs in SQLite before model or posting work.
-4. It reads bounded, sanitized thread context through ptchan-gateway.
-5. It asks DeepSeek for a response and posts the result through ptchan-gateway.
+4. When `channer.require_donor` is enabled, posts without an explicit gateway
+   `donor: true` receive `channer.donor_required_message` without reading context
+   or calling the AI. Eligibility depends only on the gateway's `donor` field.
+   These replies use the same ledger and rate limits.
+   Notice attempts are limited to once per thread every 12 hours, including failed
+   or uncertain posts. Suppressed notices consume no reply budget. The cooldown
+   is in memory and resets on restart.
+5. Otherwise, it reads bounded, sanitized thread context through ptchan-gateway.
+6. It asks DeepSeek for a response and posts the result through ptchan-gateway.
+
+The donor requirement defaults to off. Set `require_donor = true` and a nonblank
+`donor_required_message` under `[channer]` to enable it, then restart Martie.
 
 The SQLite ledger makes repeated deliveries of an admitted event safe. Model,
 posting, and unknown posting outcomes are final: Martie deliberately does not
@@ -102,7 +114,8 @@ The operational metrics are:
   `source` set to `op` or `reply`.
 - `martie_channer_reply_deliveries_total{result}` — posting attempts.
 - `martie_channer_context_uses_total{type}` — context sources used.
-- `martie_channer_outcomes_total{outcome}` — terminal outcome for admitted work.
+- `martie_channer_outcomes_total{outcome}` — terminal outcome for admitted work,
+  including `donor_notice_suppressed` during the 12-hour thread cooldown.
 - `martie_model_completion_duration_seconds{provider,model,outcome}` and
   `martie_model_tokens_total{provider,model,type}` — model use.
 

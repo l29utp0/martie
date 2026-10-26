@@ -8,17 +8,21 @@ import (
 	"golang.org/x/time/rate"
 )
 
+const donorNoticeCooldown = 12 * time.Hour
+
 type limitResult uint8
 
 const (
 	limitAllowed limitResult = iota
 	limitGlobal
 	limitThread
+	limitDonorNotice
 )
 
 type threadLimit struct {
-	limiter  *rate.Limiter
-	lastSeen time.Time
+	limiter         *rate.Limiter
+	lastSeen        time.Time
+	lastDonorNotice time.Time
 }
 
 // Limiter applies the process-wide and per-thread reply budgets as one
@@ -41,14 +45,18 @@ func NewLimiter(globalPerHour, globalBurst, threadPerHour, threadBurst int) *Lim
 	}
 }
 
-func (l *Limiter) allow(thread gateway.ThreadRef, now time.Time) limitResult {
+func (l *Limiter) allow(thread gateway.ThreadRef, now time.Time, donorNotice bool) limitResult {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
 	for ref, limit := range l.threads {
-		if now.Sub(limit.lastSeen) >= time.Hour {
+		if now.Sub(limit.lastSeen) >= time.Hour && now.Sub(limit.lastDonorNotice) >= donorNoticeCooldown {
 			delete(l.threads, ref)
 		}
+	}
+
+	if limit := l.threads[thread]; donorNotice && limit != nil && !limit.lastDonorNotice.IsZero() && now.Sub(limit.lastDonorNotice) < donorNoticeCooldown {
+		return limitDonorNotice
 	}
 
 	if l.global.TokensAt(now) < 1 {
@@ -70,6 +78,11 @@ func (l *Limiter) allow(thread gateway.ThreadRef, now time.Time) limitResult {
 		return limitThread
 	}
 
+	// Reserve before posting so concurrent requests and uncertain outcomes cannot
+	// produce repeated notices. Failed attempts also retain the cooldown.
+	if donorNotice {
+		limit.lastDonorNotice = now
+	}
 	l.global.AllowN(now, 1)
 	limit.limiter.AllowN(now, 1)
 	return limitAllowed

@@ -3,6 +3,7 @@ package app
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/loynet/ptchan-ai/context/thread"
@@ -91,4 +92,44 @@ func writeConfig(t *testing.T, contents string) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+func TestValidateRunDonorRequirement(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		enabled bool
+		message string
+		valid   bool
+	}{
+		{"disabled", false, "", true},
+		{"enabled without message", true, "", false},
+		{"enabled with blank message", true, " \n\t", false},
+		{"enabled with custom message", true, "Torna-te doador.", true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := validConfig()
+			cfg.Channer.RequireDonor = tt.enabled
+			cfg.Channer.DonorRequiredMessage = tt.message
+			if err := cfg.ValidateRun(); (err == nil) != tt.valid {
+				t.Fatalf("ValidateRun = %v, want valid = %v", err, tt.valid)
+			}
+		})
+	}
+}
+
+func TestLoadConfigDonorRequirement(t *testing.T) {
+	contents, err := os.ReadFile(filepath.Join("..", "..", "config", "example.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CONFIG_FILE", writeConfig(t, strings.Replace(string(contents), "require_donor = false", "require_donor = true", 1)))
+	t.Setenv("DEEPSEEK_API_KEY", "test-key")
+	t.Setenv("PTCHAN_INTEGRATION_MARTIE_SECRET", "test-secret")
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Channer.RequireDonor || cfg.Channer.DonorRequiredMessage == "" {
+		t.Fatal("donor configuration was not loaded")
+	}
 }

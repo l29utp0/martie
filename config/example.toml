@@ -19,6 +19,12 @@ integration_name = "martie"
 # An opening post or reply must contain one of these case-insensitive mentions
 # to receive a response. Whitespace and duplicate values are removed at startup.
 mentions = ["@martie"]
+# Require donor = true on the triggering post received from the gateway.
+# Missing/false markers receive this message without calling the AI, at most
+# once per thread every 12 hours. The cooldown resets when Martie restarts.
+# Changes take effect after restarting Martie.
+require_donor = false
+donor_required_message = "Para falares com a Martie, torna-te doador: https://ptch.net/faq.html#doar"
 # Reject a triggering post above this many Unicode code points before reading
 # context or calling the model.
 max_input_runes = 4096
@@ -32,12 +38,12 @@ prune_after = "720h"
 
 # Limits are local safeguards per Martie process, not gateway quotas.
 [channer.rate_limit]
-# Maximum admitted requests per hour across all threads.
+# Sustained request rate across all threads; tokens refill continuously.
 global_per_hour = 25
 # Maximum immediate global requests. It must be positive and no greater than
 # global_per_hour.
 global_burst = 3
-# Maximum admitted requests per hour for one thread.
+# Sustained request rate per thread; tokens refill continuously.
 thread_per_hour = 6
 # Maximum immediate requests for one thread. It must be positive and no greater
 # than thread_per_hour.

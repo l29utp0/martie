@@ -24,15 +24,16 @@ const (
 	ResultSuccess = "success"
 	ResultError   = "error"
 
-	outcomePosted             = "posted"
-	outcomeGlobalRateLimited  = "local_global_rate_limited"
-	outcomeThreadRateLimited  = "local_thread_rate_limited"
-	outcomeGatewayRateLimited = "gateway_rate_limited"
-	outcomeCompletionError    = "completion_error"
-	outcomeCompletionRejected = "completion_rejected"
-	outcomePostingRejected    = "posting_rejected"
-	outcomePostingUnknown     = "posting_unknown"
-	outcomeNotConfigured      = "not_configured"
+	outcomeDonorNoticeSuppressed = "donor_notice_suppressed"
+	outcomePosted                = "posted"
+	outcomeGlobalRateLimited     = "local_global_rate_limited"
+	outcomeThreadRateLimited     = "local_thread_rate_limited"
+	outcomeGatewayRateLimited    = "gateway_rate_limited"
+	outcomeCompletionError       = "completion_error"
+	outcomeCompletionRejected    = "completion_rejected"
+	outcomePostingRejected       = "posting_rejected"
+	outcomePostingUnknown        = "posting_unknown"
+	outcomeNotConfigured         = "not_configured"
 
 	invocationOP    = "op"
 	invocationReply = "reply"
@@ -42,6 +43,7 @@ const (
 func TerminalOutcomes() []string {
 	return []string{
 		outcomePosted,
+		outcomeDonorNoticeSuppressed,
 		outcomeGlobalRateLimited,
 		outcomeThreadRateLimited,
 		outcomeGatewayRateLimited,
@@ -62,15 +64,17 @@ func InvocationSources() []string {
 }
 
 type Config struct {
-	Mentions      []string
-	SystemPrompt  string
-	MaxInputRunes int
-	GlobalPerHour int
-	GlobalBurst   int
-	ThreadPerHour int
-	ThreadBurst   int
-	PruneAfter    time.Duration
-	ThreadContext thread.Config
+	Mentions             []string
+	RequireDonor         bool
+	DonorRequiredMessage string
+	SystemPrompt         string
+	MaxInputRunes        int
+	GlobalPerHour        int
+	GlobalBurst          int
+	ThreadPerHour        int
+	ThreadBurst          int
+	PruneAfter           time.Duration
+	ThreadContext        thread.Config
 }
 
 type Responder struct {
@@ -133,6 +137,7 @@ type request struct {
 	PostID  int64
 	Text    string
 	Mention string
+	Donor   bool
 }
 
 func (a *Responder) SetNowFunc(nowFunc func() time.Time) {
@@ -230,11 +235,13 @@ func (a Responder) handle(ctx context.Context, request request) error {
 		a.Logger.Debug("channer event was not claimable", "event_id", request.EventID)
 		return nil
 	}
-	if a.Completer == nil || a.Poster == nil {
+	if a.Poster == nil || (a.Completer == nil && (!a.Config.RequireDonor || request.Donor)) {
 		return a.markFailed(ctx, request, "not_configured", "channer completion or posting is not configured")
 	}
 	if a.Limit != nil {
-		switch a.Limit.allow(request.Thread, startedAt) {
+		switch a.Limit.allow(request.Thread, startedAt, a.Config.RequireDonor && !request.Donor) {
+		case limitDonorNotice:
+			return a.markFailed(ctx, request, outcomeDonorNoticeSuppressed, "donor notice already attempted in this thread within 12 hours")
 		case limitGlobal:
 			a.logRateLimit(request, "global")
 			return a.markFailed(ctx, request, outcomeGlobalRateLimited, "channer global rate limit exceeded")
@@ -242,6 +249,10 @@ func (a Responder) handle(ctx context.Context, request request) error {
 			a.logRateLimit(request, "thread")
 			return a.markFailed(ctx, request, outcomeThreadRateLimited, "channer thread rate limit exceeded")
 		}
+	}
+
+	if a.Config.RequireDonor && !request.Donor {
+		return a.post(ctx, request, formatChannerReply(request.PostID, a.Config.DonorRequiredMessage))
 	}
 
 	var contextText string
@@ -274,8 +285,12 @@ func (a Responder) handle(ctx context.Context, request request) error {
 	if replyText == "" {
 		return a.markFailed(ctx, request, "completion_rejected", "completion contained no reply after removing the triggering post reference")
 	}
-	finalizeCtx, cancel = finalizationContext(ctx)
-	err = a.Store.MarkEventPosting(finalizeCtx, request.EventID, a.now().UTC())
+	return a.post(ctx, request, replyText)
+}
+
+func (a Responder) post(ctx context.Context, request request, replyText string) error {
+	finalizeCtx, cancel := finalizationContext(ctx)
+	err := a.Store.MarkEventPosting(finalizeCtx, request.EventID, a.now().UTC())
 	cancel()
 	if err != nil {
 		return err
@@ -359,7 +374,7 @@ func (a Responder) logTerminalFailure(request request, status channerstate.Event
 
 func failureOutcome(code string) string {
 	switch code {
-	case outcomeGlobalRateLimited, outcomeThreadRateLimited:
+	case outcomeGlobalRateLimited, outcomeThreadRateLimited, outcomeDonorNoticeSuppressed:
 		return code
 	case "rate_limited":
 		return outcomeGatewayRateLimited
@@ -560,6 +575,7 @@ func (a Responder) admit(event gateway.WebhookEvent) (*request, admissionResult)
 		PostID:  event.Post.PostID,
 		Text:    strings.TrimSpace(removeMentionAt(text, mention, index)),
 		Mention: mention,
+		Donor:   event.Post.Donor != nil && *event.Post.Donor,
 	}, admissionAccepted
 }
 

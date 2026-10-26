@@ -50,11 +50,13 @@ type fileConfig struct {
 		IntegrationName string `toml:"integration_name"`
 	} `toml:"ptchan"`
 	Channer struct {
-		Mentions      []string `toml:"mentions"`
-		MaxInputRunes int      `toml:"max_input_runes"`
-		SystemPrompt  string   `toml:"system_prompt"`
-		PruneAfter    string   `toml:"prune_after"`
-		RateLimit     struct {
+		Mentions             []string `toml:"mentions"`
+		RequireDonor         bool     `toml:"require_donor"`
+		DonorRequiredMessage string   `toml:"donor_required_message"`
+		MaxInputRunes        int      `toml:"max_input_runes"`
+		SystemPrompt         string   `toml:"system_prompt"`
+		PruneAfter           string   `toml:"prune_after"`
+		RateLimit            struct {
 			GlobalPerHour int `toml:"global_per_hour"`
 			GlobalBurst   int `toml:"global_burst"`
 			ThreadPerHour int `toml:"thread_per_hour"`
@@ -141,14 +143,16 @@ func LoadConfig() (Config, error) {
 		},
 		SQLitePath: filepath.Clean(strings.TrimSpace(raw.Storage.SQLitePath)),
 		Channer: channer.Config{
-			Mentions:      cleanMentions(raw.Channer.Mentions),
-			SystemPrompt:  strings.ReplaceAll(strings.TrimSpace(raw.Channer.SystemPrompt), "{{name}}", name),
-			MaxInputRunes: raw.Channer.MaxInputRunes,
-			GlobalPerHour: raw.Channer.RateLimit.GlobalPerHour,
-			GlobalBurst:   raw.Channer.RateLimit.GlobalBurst,
-			ThreadPerHour: raw.Channer.RateLimit.ThreadPerHour,
-			ThreadBurst:   raw.Channer.RateLimit.ThreadBurst,
-			PruneAfter:    pruneAfter,
+			Mentions:             cleanMentions(raw.Channer.Mentions),
+			RequireDonor:         raw.Channer.RequireDonor,
+			DonorRequiredMessage: strings.TrimSpace(raw.Channer.DonorRequiredMessage),
+			SystemPrompt:         strings.ReplaceAll(strings.TrimSpace(raw.Channer.SystemPrompt), "{{name}}", name),
+			MaxInputRunes:        raw.Channer.MaxInputRunes,
+			GlobalPerHour:        raw.Channer.RateLimit.GlobalPerHour,
+			GlobalBurst:          raw.Channer.RateLimit.GlobalBurst,
+			ThreadPerHour:        raw.Channer.RateLimit.ThreadPerHour,
+			ThreadBurst:          raw.Channer.RateLimit.ThreadBurst,
+			PruneAfter:           pruneAfter,
 			ThreadContext: thread.Config{
 				BaseURL:         ptchan.BaseURL,
 				IntegrationName: ptchan.IntegrationName,
@@ -177,6 +181,8 @@ func (c Config) ValidateRun() error {
 		return fmt.Errorf("DEEPSEEK_API_KEY is required")
 	case c.DeepSeek.Model == "" || c.DeepSeek.MaxTokens <= 0:
 		return fmt.Errorf("valid deepseek configuration is required")
+	case c.Channer.RequireDonor && strings.TrimSpace(c.Channer.DonorRequiredMessage) == "":
+		return fmt.Errorf("channer.donor_required_message is required when require_donor is enabled")
 	case c.Channer.SystemPrompt == "":
 		return fmt.Errorf("channer.system_prompt is required")
 	case len(c.Channer.Mentions) == 0 || c.Channer.MaxInputRunes <= 0:

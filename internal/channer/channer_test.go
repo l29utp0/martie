@@ -539,8 +539,10 @@ func TestChannerMarksThreadRateLimitedEventFinal(t *testing.T) {
 	now := time.Date(2026, time.July, 25, 12, 0, 0, 0, time.UTC)
 	limit := NewLimiter(25, 3, 6, 2)
 	thread := gateway.ThreadRef{Board: "i", ThreadID: 100}
-	if limit.allow(thread, now) != limitAllowed || limit.allow(thread, now) != limitAllowed {
-		t.Fatal("could not exhaust thread burst")
+	for i := range 2 {
+		if got := limit.allow(thread, now, false); got != limitAllowed {
+			t.Fatalf("burst request %d = %v, want allowed", i+1, got)
+		}
 	}
 	channer := Responder{
 		Config:    Config{Mentions: []string{"@martie"}, MaxInputRunes: 100},
@@ -840,4 +842,140 @@ func (f *fakeCompleter) Complete(_ context.Context, systemPrompt string, message
 
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+func TestChannerDonorRequirement(t *testing.T) {
+	donor, nonDonor := true, false
+	for _, kind := range []gateway.EventKind{gateway.PostCreated, gateway.ThreadCreated} {
+		for _, tt := range []struct {
+			name    string
+			enabled bool
+			donor   *bool
+			blocked bool
+		}{
+			{"donor allowed", true, &donor, false},
+			{"non-donor blocked", true, &nonDonor, true},
+			{"missing marker blocked", true, nil, true},
+			{"disabled non-donor allowed", false, &nonDonor, false},
+			{"disabled missing marker allowed", false, nil, false},
+		} {
+			t.Run(string(kind)+"/"+tt.name, func(t *testing.T) {
+				store := testChannerStore(t)
+				completer := &fakeCompleter{completion: deepseek.Completion{Text: "AI response", FinishReason: deepseek.FinishStop}}
+				poster := &fakePtchanPoster{reply: gateway.ReplyResponse{Board: "i", ThreadID: 100, PostID: 105}}
+				responder := Responder{
+					Config: Config{Mentions: []string{"@martie"}, MaxInputRunes: 100, RequireDonor: tt.enabled, DonorRequiredMessage: "Torna-te doador."},
+					Store:  store, Completer: completer, Poster: poster, Logger: discardLogger(),
+				}
+				event := gateway.WebhookEvent{EventID: "donor-event", Kind: kind, Post: gateway.Post{Board: "i", ThreadID: 100, PostID: 101, Message: "@martie hello", Donor: tt.donor}}
+				for range 2 {
+					if err := responder.ConsumeGatewayEvent(context.Background(), event); err != nil {
+						t.Fatal(err)
+					}
+				}
+				wantCalls, wantText := 1, ">>101\nAI response"
+				if tt.blocked {
+					wantCalls, wantText = 0, ">>101\nTorna-te doador."
+				}
+				if len(completer.requests) != wantCalls {
+					t.Fatalf("model calls = %d, want %d", len(completer.requests), wantCalls)
+				}
+				if len(poster.requests) != 1 || poster.requests[0].message != wantText {
+					t.Fatalf("posts = %+v", poster.requests)
+				}
+				record, ok, err := store.GetEvent(context.Background(), event.EventID)
+				if err != nil || !ok || record.Status != channerstate.EventPosted {
+					t.Fatalf("record = %+v, found = %v, err = %v", record, ok, err)
+				}
+			})
+		}
+	}
+}
+
+func TestChannerDonorNoticePostingFailureIsFinal(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		err    error
+		status channerstate.EventStatus
+	}{
+		{"rejected", &gateway.Error{Code: "forbidden", Message: "denied"}, channerstate.EventFailedFinal},
+		{"unknown", errors.New("connection lost"), channerstate.EventUnknown},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			store := testChannerStore(t)
+			poster := &fakePtchanPoster{err: tt.err}
+			responder := Responder{Config: Config{Mentions: []string{"@martie"}, MaxInputRunes: 100, RequireDonor: true, DonorRequiredMessage: "Torna-te doador."}, Store: store, Poster: poster, Logger: discardLogger()}
+			event := gateway.WebhookEvent{EventID: "notice", Kind: gateway.PostCreated, Post: gateway.Post{Board: "i", ThreadID: 100, PostID: 101, Message: "@martie hello"}}
+			for range 2 {
+				if err := responder.ConsumeGatewayEvent(context.Background(), event); err != nil {
+					t.Fatal(err)
+				}
+			}
+			record, _, err := store.GetEvent(context.Background(), event.EventID)
+			if err != nil || record.Status != tt.status || len(poster.requests) != 1 {
+				t.Fatalf("record = %+v, posts = %d, err = %v", record, len(poster.requests), err)
+			}
+		})
+	}
+}
+
+func TestChannerDonorNoticeUsesRateLimit(t *testing.T) {
+	store := testChannerStore(t)
+	poster := &fakePtchanPoster{reply: gateway.ReplyResponse{Board: "i", ThreadID: 100, PostID: 105}}
+	now := time.Now()
+	responder := Responder{
+		Config: Config{Mentions: []string{"@martie"}, MaxInputRunes: 100, RequireDonor: true, DonorRequiredMessage: "Torna-te doador."},
+		Store:  store, Poster: poster, Logger: discardLogger(), Limit: NewLimiter(1, 1, 1, 1), nowFunc: func() time.Time { return now },
+	}
+	event := gateway.WebhookEvent{EventID: "first-notice", Kind: gateway.PostCreated, Post: gateway.Post{Board: "i", ThreadID: 100, PostID: 101, Message: "@martie hello"}}
+	if err := responder.ConsumeGatewayEvent(context.Background(), event); err != nil {
+		t.Fatal(err)
+	}
+	event.EventID = "limited-notice"
+	event.Post.ThreadID = 200
+	event.Post.PostID = 102
+	if err := responder.ConsumeGatewayEvent(context.Background(), event); err != nil {
+		t.Fatal(err)
+	}
+	record, _, err := store.GetEvent(context.Background(), event.EventID)
+	if err != nil || record.Status != channerstate.EventFailedFinal || record.ErrorCode != outcomeGlobalRateLimited || len(poster.requests) != 1 {
+		t.Fatalf("record = %+v, posts = %d, err = %v", record, len(poster.requests), err)
+	}
+}
+
+func TestChannerSuppressesDonorNoticeWithinThread(t *testing.T) {
+	store := testChannerStore(t)
+	poster := &fakePtchanPoster{reply: gateway.ReplyResponse{Board: "i", ThreadID: 100, PostID: 105}}
+	completer := &fakeCompleter{completion: deepseek.Completion{Text: "answer", FinishReason: deepseek.FinishStop}}
+	now := time.Now()
+	responder := Responder{
+		Config: Config{Mentions: []string{"@martie"}, MaxInputRunes: 100, RequireDonor: true, DonorRequiredMessage: "Torna-te doador: https://ptch.net/faq.html#doar"},
+		Store:  store, Completer: completer, Poster: poster, Logger: discardLogger(), Limit: NewLimiter(20, 20, 20, 20), nowFunc: func() time.Time { return now },
+	}
+	event := gateway.WebhookEvent{EventID: "first", Kind: gateway.PostCreated, Post: gateway.Post{Board: "i", ThreadID: 100, PostID: 101, Message: "@martie hello"}}
+	if err := responder.ConsumeGatewayEvent(context.Background(), event); err != nil {
+		t.Fatal(err)
+	}
+	event.EventID = "suppressed"
+	event.Post.PostID++
+	for range 2 {
+		if err := responder.ConsumeGatewayEvent(context.Background(), event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	record, _, err := store.GetEvent(context.Background(), event.EventID)
+	if err != nil || record.ErrorCode != outcomeDonorNoticeSuppressed || len(poster.requests) != 1 || len(completer.requests) != 0 {
+		t.Fatalf("record = %+v, posts = %d, completions = %d, err = %v", record, len(poster.requests), len(completer.requests), err)
+	}
+	if !strings.Contains(poster.requests[0].message, "https://ptch.net/faq.html#doar") {
+		t.Fatal("notice is missing FAQ link")
+	}
+	now = now.Add(12 * time.Hour)
+	event.EventID = "next-window"
+	if err := responder.ConsumeGatewayEvent(context.Background(), event); err != nil {
+		t.Fatal(err)
+	}
+	if len(poster.requests) != 2 || len(completer.requests) != 0 {
+		t.Fatalf("posts = %d, completions = %d", len(poster.requests), len(completer.requests))
+	}
 }
